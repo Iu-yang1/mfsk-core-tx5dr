@@ -147,6 +147,27 @@ mod tests {
     /// this is the WSJT-X-equivalent `h(i)` filter (`analytic.f90:26-43`)
     /// this port now applies.
     #[test]
+    fn adaptive_coefficients_rotate_only_the_passband_phase() {
+        let n=1200usize;
+        let tone:Vec<f32>=(0..n).map(|i|{
+            (core::f32::consts::TAU*2300.0*i as f32/12_000.0).cos()
+        }).collect();
+        let original=analytic_signal(&tone);
+        let corrected=analytic_signal_with_coefficients(&tone,Some(&[0.0,0.0,0.4,0.0,0.0]));
+        let mut planner=default_planner();
+        let fft=planner.plan_forward(n);
+        let mut a=original;
+        let mut b=corrected;
+        fft.process(&mut a);
+        fft.process(&mut b);
+        let ratio=b[230]/a[230];
+        let expected=0.4*(0.8f32*0.8);
+        assert!((ratio.norm()-1.0).abs()<1e-3);
+        assert!((ratio.arg()-expected).abs()<1e-3,
+            "phase deviation {}",ratio.arg()-expected);
+    }
+
+    #[test]
     fn analytic_signal_attenuates_out_of_band_tone() {
         let n = 256;
         let k0 = 64; // freq = 64 * (12000/256) = 3000 Hz, |3000-1500| = 1500 Hz > 1100 Hz stopband edge.

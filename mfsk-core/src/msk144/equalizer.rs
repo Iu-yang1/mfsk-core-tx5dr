@@ -192,6 +192,39 @@ mod tests {
     use super::*;
     use crate::msg::wsjt77::pack77;
     #[test]
+    fn learns_a_deliberately_distorted_phase_curve_from_five_frames() {
+        let info=pack77("K1ABC","K2ABC","-10").unwrap();
+        let model=synth_codeword_frame(&codeword(&info));
+        let mut spectrum=model.to_vec();
+        let mut plan=default_planner();
+        let fwd=plan.plan_forward(N);
+        let inv=plan.plan_inverse(N);
+        fwd.process(&mut spectrum);
+        // The channel rotates RX by the negative of the 0.45*x^2+0.12*x^3
+        // phase response. The learned correction must reverse it.
+        for (k,value) in spectrum.iter_mut().enumerate() {
+            let signed=if k<=N/2 {k as isize}else{k as isize-N as isize};
+            let x=signed as f32*(12_000.0/N as f32)/1000.0;
+            let phase=-(0.45*x*x+0.12*x*x*x);
+            *value*=Complex32::new(phase.cos(),phase.sin());
+        }
+        inv.process(&mut spectrum);
+        for v in &mut spectrum{*v/=N as f32;}
+        let mut eq=AdaptiveEqualizer::default();
+        eq.configure(true,"K2ABC");
+        for k in 0..5 {
+            eq.observe(&spectrum,&info,"K1ABC K2ABC -10",0,12.0,k as f64);
+        }
+        let status=eq.status();
+        assert!(status.trained,"high-confidence phase-distorted frames must train");
+        assert!((status.coefficients[2]-0.45).abs()<0.08,
+            "quadratic phase correction {}",status.coefficients[2]);
+        assert!((status.coefficients[3]-0.12).abs()<0.08,
+            "cubic phase correction {}",status.coefficients[3]);
+        assert!(status.residual_rms_rad<0.1);
+    }
+
+    #[test]
     fn requires_five_independent_verified_frames_and_target() {
         let info=pack77("K1ABC","K2ABC","-10").unwrap();
         let model=synth_codeword_frame(&codeword(&info));
