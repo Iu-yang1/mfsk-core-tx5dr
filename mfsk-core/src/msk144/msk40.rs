@@ -325,6 +325,100 @@ fn sync_template() -> [Complex32; 42] {
     t
 }
 
+/// Stage-0 WSJT-X msk40spd.f90 two-tone squared-signal burst detector.
+/// Scan 240 samples every 60 (5 ms) at 12 kHz and compare FFT power
+/// near 2*(fc-500) and 2*(fc+500). This non-coherent stage only supplies
+/// timing/CFO hypotheses; no message is accepted without sync + BP checks.
+#[cfg(any(feature="fft-rustfft",feature="fft-extern"))]
+#[derive(Clone,Copy,Debug)]
+pub struct TwoToneCandidate {
+    pub sample: usize,
+    pub frequency_error_hz: f32,
+    pub strength: f32,
+}
+
+#[cfg(any(feature="fft-rustfft",feature="fft-extern"))]
+pub fn detect_two_tone_candidates(
+    analytic:&[Complex32],fc:f32,ntol:f32,
+)->Vec<TwoToneCandidate>{
+    let mut out=Vec::new();
+    if analytic.len()<720 || !fc.is_finite()||!ntol.is_finite()
+        || !(800.0..=2200.0).contains(&fc)
+        || !(0.0..=250.0).contains(&ntol){return out;}
+    const NFFT:usize=240;
+    const STEP:usize=60;
+    let nsteps=((analytic.len()-NFFT)/STEP+1).min(150);
+    let df=FS as f32/NFFT as f32;
+    let nominal_low=2.0*(fc-500.0);
+    let nominal_high=2.0*(fc+500.0);
+    let mut planner=crate::engine::fft::default_planner();
+    let fwd=planner.plan_forward(NFFT);
+    let mut metrics=vec![0.0f32;nsteps];
+    let mut tonescore=vec![0.0f32;nsteps];
+    let mut freqerr=vec![f32::NAN;nsteps];
+    let mut window=[0f32;12];
+    for (k,w) in window.iter_mut().enumerate(){
+        *w=(1.0-(core::f32::consts::PI*k as f32/12.0).cos())/2.0;
+    }
+    for step in 0..nsteps{
+        let start=step*STEP;
+        let mut transformed=Vec::with_capacity(NFFT);
+        for k in 0..NFFT{
+            let mut z=analytic[start+k]*analytic[start+k];
+            if k<12{z*=window[k];}
+            if k>=NFFT-12{z*=window[NFFT-1-k];}
+            transformed.push(z);
+        }
+        fwd.process(&mut transformed);
+        let powers:Vec<f32>=transformed.iter().map(|v|v.norm_sqr()).collect();
+        let peak=|center:f32|->Option<(usize,f32,f32,f32)>{
+            let lo=(((center-2.0*ntol)/df).round() as isize).clamp(1,118) as usize;
+            let hi=(((center+2.0*ntol)/df).round() as isize).clamp(1,118) as usize;
+            if lo>hi {return None;}
+            let index=(lo..=hi).max_by(|a,b|powers[*a].total_cmp(&powers[*b]))?;
+            let amp=powers[index];
+            let others=(lo..=hi).filter(|i|*i!=index).map(|i|powers[i]).sum::<f32>();
+            let avg=others/(hi-lo+1) as f32;
+            let num=transformed[index-1]-transformed[index+1];
+            let den=transformed[index]*2.0-transformed[index-1]-transformed[index+1];
+            let interp=if den.norm_sqr()>1e-16 {
+                -(num/den).re.clamp(-0.5,0.5)
+            }else{0.0};
+            Some((index,amp,amp/(avg+0.01),(index as f32+interp)*df))
+        };
+        let Some(hi)=peak(nominal_high)else{continue;};
+        let Some(lo)=peak(nominal_low)else{continue;};
+        metrics[step]=hi.1.max(lo.1);
+        tonescore[step]=hi.2.max(lo.2);
+        freqerr[step]=if hi.1>=lo.1 {
+            (hi.3-nominal_high)/2.0
+        }else{(lo.3-nominal_low)/2.0};
+    }
+    let mut sorted=metrics.clone();
+    sorted.sort_by(|a,b|a.total_cmp(b));
+    let background=sorted[(nsteps/4).min(nsteps-1)].max(1e-6);
+    for item in &mut metrics{*item/=background;}
+    // WSJT-X msk40spd first selects <=5 coarse energy peaks >=3.5,
+    // then supplements using tone peak-vs-mean ratios >=12.
+    for phase in 0..2{
+        while out.len()<5{
+            let current=if phase==0 {&mut metrics}else{&mut tonescore};
+            let Some(index)=(0..nsteps).max_by(|a,b|current[*a].total_cmp(&current[*b]))else{break};
+            let score=current[index];
+            if score<(if phase==0 {3.5}else{12.0}){break;}
+            current[index]=0.0;
+            if !freqerr[index].is_finite() || freqerr[index].abs()>ntol{continue;}
+            if out.iter().any(|c: &TwoToneCandidate|
+                c.sample.abs_diff(index*STEP)<STEP) {continue;}
+            out.push(TwoToneCandidate{
+                sample:index*STEP+1,frequency_error_hz:freqerr[index],
+                strength:score,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(any(feature="fft-rustfft", feature="fft-extern"))]
 fn demodulate_frame(c: &[Complex32; 240], template:&[Complex32;42]) -> Option<[f32;40]> {
     let pp=crate::engine::dsp::msk::half_sine_pulse();
@@ -367,6 +461,7 @@ pub fn decode_analytic(
         || !ntol.is_finite() || !(0.0..=250.0).contains(&ntol)
         || analytic.iter().any(|c|!c.re.is_finite()||!c.im.is_finite()){return None;}
     let expected=pair_hash(&format!("{a} {b}"));
+    let two_tone=detect_two_tone_candidates(analytic,fc,ntol);
     let sync=sync_template();
     let norm: f32=sync.iter().map(|c|c.norm_sqr()).sum();
     let mut winners:Vec<(f32,usize,f32)>=Vec::with_capacity(10);
@@ -389,6 +484,11 @@ pub fn decode_analytic(
         // Coarse 3-sample timing search; shortlisted peaks get fully
         // resolved with BP and the independent codeword quality gate.
         for offset in (0..=base.len()-240).step_by(3){
+            if !two_tone.is_empty() && !two_tone.iter().any(|candidate|
+                offset.abs_diff(candidate.sample)<=3*FRAME_SAMPLES
+                && (freq-(fc+candidate.frequency_error_hz)).abs()<=35.0) {
+                continue;
+            }
             let mut dot=Complex32::new(0.0,0.0);
             let mut energy=0.0f32;
             for k in 0..42 {
@@ -457,6 +557,10 @@ mod acquisition_tests {
         let mut received=vec![0.0f32;7168];
         received[920..920+240*5].copy_from_slice(&audio[..240*5]);
         let analytic=analytic_signal(&received);
+        let candidates=detect_two_tone_candidates(&analytic,1500.0,12.0);
+        assert!(!candidates.is_empty(),"WSJT-X two-tone stage must detect a clean MSK40 ping");
+        assert!(candidates.iter().any(|c|c.sample.abs_diff(920)<240),
+            "candidate timing must be near the real burst");
         let got=decode_analytic(&analytic,1500.0,12.0,"K1ABC","W9XYZ");
         assert_eq!(got.as_ref().map(|x|x.message.as_str()),Some("<K1ABC W9XYZ> RRR"));
         assert!(decode_analytic(&analytic,1500.0,12.0,"K1ABC","K2ABC").is_none());
