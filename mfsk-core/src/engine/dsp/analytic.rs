@@ -57,6 +57,18 @@ fn bandpass_gain(freq_hz: f32) -> f32 {
 /// [`SAMPLE_RATE_HZ`] — the only sample rate this crate's MSK144 pipeline
 /// uses.
 pub fn analytic_signal(input: &[f32]) -> Vec<Complex32> {
+    analytic_signal_with_coefficients(input, None)
+}
+
+/// WSJT-X analytic.f90's optional receiver phase equalization. The fixed
+/// raised-cosine prefilter remains applied in either mode; polynomial phase
+/// correction affects only positive frequencies. Coefficients are trained in
+/// the MSK144 stream from 5+ CRC-validated DX frames, and *only* the quadratic,
+/// cubic and quartic terms are applied (the constant and linear components
+/// are carrier phase/time offset, not an equalizer).
+pub fn analytic_signal_with_coefficients(
+    input: &[f32], coefficients: Option<&[f64;5]>,
+) -> Vec<Complex32> {
     let n = input.len();
     let mut planner = default_planner();
     let fwd = planner.plan_forward(n);
@@ -71,12 +83,22 @@ pub fn analytic_signal(input: &[f32]) -> Vec<Complex32> {
     } else {
         None
     };
+    let phase_correction = |k:usize| {
+        if let Some(c)=coefficients {
+            let x=(k as f64 * df as f64 - FILTER_CENTER_HZ as f64)/1000.0;
+            let phi=x*x*(c[2]+x*(c[3]+x*c[4]));
+            if phi.is_finite() && phi.abs()<=10.0 {
+                return Complex32::new((phi as f32).cos(),(phi as f32).sin());
+            }
+        }
+        Complex32::new(1.0,0.0)
+    };
     for (k, xv) in x.iter_mut().enumerate() {
         if k == 0 || Some(k) == nyquist {
             // DC / Nyquist: leave unscaled (but still filtered).
-            *xv *= bandpass_gain(k as f32 * df);
+            *xv *= bandpass_gain(k as f32 * df) * phase_correction(k);
         } else if k < n.div_ceil(2) {
-            *xv *= 2.0 * bandpass_gain(k as f32 * df);
+            *xv *= 2.0 * bandpass_gain(k as f32 * df) * phase_correction(k);
         } else {
             *xv = Complex32::new(0.0, 0.0);
         }

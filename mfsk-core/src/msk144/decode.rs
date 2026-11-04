@@ -35,7 +35,8 @@ use num_traits::Float;
 
 use crate::decoder::Depth;
 use crate::engine::DecodeContext;
-use crate::engine::dsp::analytic_signal;
+use crate::engine::dsp::analytic::analytic_signal_with_coefficients;
+use crate::msk144::equalizer::{AdaptiveEqualizer,AdaptiveEqualizerStatus};
 use crate::engine::dsp::msk::NSPM;
 use crate::msk144::sync::{msk144_sync, rotate_to_shift};
 use crate::msk144::{frame_decode::decode_frame, spd::short_ping_decode};
@@ -134,6 +135,8 @@ struct ScanState {
     pnoise: f32,
     msglast: String,
     nsnrlast: i32,
+    equalizer: AdaptiveEqualizer,
+    block_time_s: f64,
 }
 
 impl Default for ScanState {
@@ -142,6 +145,8 @@ impl Default for ScanState {
             pnoise: -1.0,
             msglast: String::new(),
             nsnrlast: -99,
+            equalizer: AdaptiveEqualizer::default(),
+            block_time_s: 0.0,
         }
     }
 }
@@ -166,7 +171,8 @@ fn decode_block(
     }
     let fac = 1.0 / rms;
     let d_norm: Vec<f32> = d.iter().map(|&x| x * fac).collect();
-    let cdat = analytic_signal(&d_norm);
+    let cdat=analytic_signal_with_coefficients(
+        &d_norm,state.equalizer.coefficients());
 
     // Per-frame power, rescaled back to the original signal scale
     // (`mskrtd.f90:110-117`).
@@ -197,7 +203,13 @@ fn decode_block(
     if let Some(spd) = stage_a {
         #[cfg(feature = "std")]
         TRACE_STAGE_A_SUCCESS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        return finish_decode(spd.message, pmax, state, spd.tdec_sec, spd.fest);
+        let decoded=finish_decode(spd.message,pmax,state,spd.tdec_sec,spd.fest);
+        if let Some(ref accepted)=decoded {
+            state.equalizer.observe(&spd.aligned_frame,&spd.info77,&accepted.message,
+                spd.hard_errors,accepted.snr_db as f32,
+                state.block_time_s+spd.tdec_sec as f64);
+        }
+        return decoded;
     }
 
     // Stage B: longer frame-averaging fallback.
@@ -239,7 +251,13 @@ fn decode_block(
                         );
                     }
                     let tdec_sec = XMC[iavg] * tframe;
-                    return finish_decode(result.message, pmax, state, tdec_sec, sync_result.fest);
+                    let decoded=finish_decode(result.message,pmax,state,tdec_sec,sync_result.fest);
+                    if let Some(ref accepted)=decoded {
+                        state.equalizer.observe(&aligned,&result.info77,&accepted.message,
+                            result.hard_errors,accepted.snr_db as f32,
+                            state.block_time_s+tdec_sec as f64);
+                    }
+                    return decoded;
                 }
             }
         }
@@ -480,6 +498,7 @@ impl Stream {
             while self.base + self.buf.len() as u64 >= self.next + BLOCK_SIZE as u64 {
                 let off = (self.next - self.base) as usize;
                 let block = &self.buf[off..off + BLOCK_SIZE];
+                self.state.block_time_s=self.next as f64 / 12_000.0;
                 if let Some(r) = decode_block(
                     block,
                     self.fc,
@@ -501,6 +520,16 @@ impl Stream {
                 self.base = self.next;
             }
         }
+    }
+
+    /// Configure guarded WSJT-X style adaptive receiver equalization.
+    /// A blank target disables it; a different target resets training.
+    pub fn configure_equalizer(&mut self, enabled:bool, dx_call:&str) {
+        self.state.equalizer.configure(enabled,dx_call);
+    }
+
+    pub fn equalizer_status(&self)->AdaptiveEqualizerStatus {
+        self.state.equalizer.status()
     }
 
     /// A new T/R period begins: forget the last message, so a repeat of it

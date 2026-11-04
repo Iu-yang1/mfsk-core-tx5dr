@@ -283,6 +283,9 @@ pub struct ShortPingDecode {
     pub tdec_sec: f32,
     /// Number of frames coherently averaged for the winning trial (1-3).
     pub navg: usize,
+    /// For guarded RX equalizer training on a verified LDPC+CRC decode.
+    pub(crate) aligned_frame: Vec<Complex32>,
+    pub(crate) hard_errors: u32,
 }
 
 /// Try to sync, demodulate, and decode each burst candidate found by
@@ -335,6 +338,8 @@ pub fn short_ping_decode(
                             fest: sync_result.fest,
                             tdec_sec: (cand.start_sample as f32 + NSPM as f32 / 2.0) / 12_000.0,
                             navg: navmask.iter().filter(|&&b| b).count(),
+                            aligned_frame: aligned,
+                            hard_errors: result.hard_errors,
                         });
                     }
                 }
