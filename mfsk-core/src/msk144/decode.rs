@@ -39,7 +39,7 @@ use crate::engine::dsp::analytic::analytic_signal_with_coefficients;
 use crate::msk144::equalizer::{AdaptiveEqualizer,AdaptiveEqualizerStatus};
 use crate::engine::dsp::msk::NSPM;
 use crate::msk144::sync::{msk144_sync, rotate_to_shift};
-use crate::msk144::{frame_decode::decode_frame, spd::short_ping_decode};
+use crate::msk144::{frame_decode::decode_frame, spd::short_ping_decode,msk40};
 
 const BLOCK_SIZE: usize = 7168;
 const STEP_SIZE: usize = BLOCK_SIZE / 2; // 3584
@@ -137,6 +137,7 @@ struct ScanState {
     nsnrlast: i32,
     equalizer: AdaptiveEqualizer,
     block_time_s: f64,
+    shorthand_calls: Option<(String,String)>,
 }
 
 impl Default for ScanState {
@@ -147,6 +148,7 @@ impl Default for ScanState {
             nsnrlast: -99,
             equalizer: AdaptiveEqualizer::default(),
             block_time_s: 0.0,
+            shorthand_calls: None,
         }
     }
 }
@@ -210,6 +212,16 @@ fn decode_block(
                 state.block_time_s+spd.tdec_sec as f64);
         }
         return decoded;
+    }
+
+    // WSJT-X mskrtd.f90:126-129, after MSK144 short-ping Stage A and
+    // before the longer 72 ms Stage B. Explicit known-call context is
+    // mandatory for the 12-bit shorthand hash, otherwise a random hash
+    // would be promoted to an unverified DX station identity.
+    if let Some((call1,call2))=state.shorthand_calls.as_ref() {
+        if let Some(short)=msk40::decode_analytic(cbig,fc,ntol,call1,call2) {
+            return finish_decode(short.message,pmax,state,short.t_sec,short.frequency_hz);
+        }
     }
 
     // Stage B: longer frame-averaging fallback.
@@ -520,6 +532,20 @@ impl Stream {
                 self.base = self.next;
             }
         }
+    }
+
+    /// Enable or disable 40 ms shorthand decoding for exactly one
+    /// known callsign pair. Clearing this context also prevents the
+    /// otherwise expensive timing/frequency sync search from running.
+    pub fn configure_shorthand(&mut self, enabled:bool,call1:&str,call2:&str){
+        let a=call1.trim().to_ascii_uppercase();
+        let b=call2.trim().to_ascii_uppercase();
+        self.state.shorthand_calls=if enabled
+            && (3..=12).contains(&a.len()) && (3..=12).contains(&b.len())
+            && a.bytes().chain(b.bytes()).all(|v|
+                v.is_ascii_uppercase() || v.is_ascii_digit() || v==b'/') {
+            Some((a,b))
+        }else {None};
     }
 
     /// Configure guarded WSJT-X style adaptive receiver equalization.
