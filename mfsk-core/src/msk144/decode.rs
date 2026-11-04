@@ -222,10 +222,10 @@ fn decode_block(
     // before the longer 72 ms Stage B. Explicit known-call context is
     // mandatory for the 12-bit shorthand hash, otherwise a random hash
     // would be promoted to an unverified DX station identity.
-    if let Some((call1, call2)) = state.shorthand_calls.as_ref() {
-        if let Some(short) = msk40::decode_analytic(cbig, fc, ntol, call1, call2) {
-            return finish_decode(short.message, pmax, state, short.t_sec, short.frequency_hz);
-        }
+    if let Some((call1, call2)) = state.shorthand_calls.as_ref()
+        && let Some(short) = msk40::decode_analytic(cbig, fc, ntol, call1, call2)
+    {
+        return finish_decode(short.message, pmax, state, short.t_sec, short.frequency_hz);
     }
 
     // Stage B: longer frame-averaging fallback.

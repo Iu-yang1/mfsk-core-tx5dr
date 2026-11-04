@@ -87,7 +87,7 @@ fn pair_hash(calls: &str) -> u16 {
     bytes[..raw.len()].copy_from_slice(raw);
     let init = 0xdead_beefu32.wrapping_add(37).wrapping_add(146);
     let (mut a, mut b, mut c) = (init, init, init);
-    for block in bytes[..36].chunks_exact(12) {
+    for block in bytes[..36].as_chunks::<12>().0 {
         a = a.wrapping_add(u32::from_le_bytes(block[0..4].try_into().unwrap()));
         b = b.wrapping_add(u32::from_le_bytes(block[4..8].try_into().unwrap()));
         c = c.wrapping_add(u32::from_le_bytes(block[8..12].try_into().unwrap()));
@@ -403,10 +403,10 @@ fn sync_template() -> [Complex32; 42] {
         }
     }
     for j in 0..12 {
-        t[12 * 0 + j].re = pp[j] * b(1);
+        t[j].re = pp[j] * b(1);
     }
     for j in 0..12 {
-        t[12 * 1 + j].re = pp[j] * b(3);
+        t[12 + j].re = pp[j] * b(3);
     }
     for j in 0..12 {
         t[12 * 2 + j].re = pp[j] * b(5);
@@ -668,10 +668,9 @@ pub fn decode_analytic(
                 .iter()
                 .enumerate()
                 .min_by(|x, y| x.1.0.total_cmp(&y.1.0))
+                && score > winners[index].0
             {
-                if score > winners[index].0 {
-                    winners[index] = (score, offset, freq);
-                }
+                winners[index] = (score, offset, freq);
             }
         }
         // Fine BP only for global best trials, not for every candidate.

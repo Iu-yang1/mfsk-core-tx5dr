@@ -119,10 +119,10 @@ impl AdaptiveEqualizer {
         {
             return false;
         }
-        if let Some(last) = self.last_time_s {
-            if (time_s - last).abs() <= 0.072 {
-                return false;
-            }
+        if let Some(last) = self.last_time_s
+            && (time_s - last).abs() <= 0.072
+        {
+            return false;
         }
         // The ideal model is generated from the verified 77 information bits,
         // never from arbitrary user text or a weak spectral peak.
