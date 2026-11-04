@@ -18,6 +18,7 @@
 #[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
 pub mod decode;
 pub mod frame_decode;
+pub mod msk40;
 #[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
 pub mod spd;
 pub mod sync;
