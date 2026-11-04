@@ -5,7 +5,9 @@
 //! WSJT-X msk40spd/bpdecode40 receiver. Do not route this to physical PTT
 //! or claim MSK40 P9 support without full decoder/equalizer acceptance.
 
-use alloc::{format, string::String, vec, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
+#[cfg(any(test, feature = "fft-rustfft", feature = "fft-extern"))]
+use alloc::vec;
 #[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
 use num_complex::Complex32;
 #[cfg(not(feature = "std"))]
