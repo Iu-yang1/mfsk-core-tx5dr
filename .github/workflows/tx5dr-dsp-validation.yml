@@ -1,0 +1,46 @@
+name: TX-5DR fork MSK40 and adaptive equalizer DSP validation
+
+on:
+  push:
+    branches:
+      - 'feature/tx5dr-*'
+      - main
+    paths:
+      - 'mfsk-core/src/msk144/**'
+      - 'mfsk-core/src/engine/dsp/analytic.rs'
+      - '.github/workflows/tx5dr-dsp-validation.yml'
+  pull_request:
+    paths:
+      - 'mfsk-core/src/msk144/**'
+      - 'mfsk-core/src/engine/dsp/analytic.rs'
+      - '.github/workflows/tx5dr-dsp-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-msk-physical:
+    name: Rust MSK40/MSK144 physical DSP tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check default and no-default API profiles
+        run: |
+          set -euo pipefail
+          cargo check -p mfsk-core --features full
+          cargo check -p mfsk-core --no-default-features --features std,fft-rustfft,msk144
+      - name: WSJT-X MSK40 protocol vectors and complex burst acquisition
+        run: |
+          set -euo pipefail
+          cargo test -p mfsk-core --features full --lib msk144::msk40 -- --nocapture
+      - name: Guarded receiver equalizer training and reset tests
+        run: |
+          set -euo pipefail
+          cargo test -p mfsk-core --features full --lib msk144::equalizer -- --nocapture
+      - name: Existing MSK144 TX and decode regression
+        run: |
+          set -euo pipefail
+          cargo test -p mfsk-core --features full --lib msk144:: -- --nocapture
