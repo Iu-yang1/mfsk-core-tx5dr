@@ -8,7 +8,7 @@
 //! constant phase, and linear delay terms).
 //! Training is station-scoped; a target change or reset invalidates it.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use num_complex::Complex32;
 #[cfg(not(feature="std"))]
 use num_traits::Float;
