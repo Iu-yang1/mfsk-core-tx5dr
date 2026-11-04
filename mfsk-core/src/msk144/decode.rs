@@ -36,10 +36,10 @@ use num_traits::Float;
 use crate::decoder::Depth;
 use crate::engine::DecodeContext;
 use crate::engine::dsp::analytic::analytic_signal_with_coefficients;
-use crate::msk144::equalizer::{AdaptiveEqualizer,AdaptiveEqualizerStatus};
 use crate::engine::dsp::msk::NSPM;
+use crate::msk144::equalizer::{AdaptiveEqualizer, AdaptiveEqualizerStatus};
 use crate::msk144::sync::{msk144_sync, rotate_to_shift};
-use crate::msk144::{frame_decode::decode_frame, spd::short_ping_decode,msk40};
+use crate::msk144::{frame_decode::decode_frame, msk40, spd::short_ping_decode};
 
 const BLOCK_SIZE: usize = 7168;
 const STEP_SIZE: usize = BLOCK_SIZE / 2; // 3584
@@ -137,7 +137,7 @@ struct ScanState {
     nsnrlast: i32,
     equalizer: AdaptiveEqualizer,
     block_time_s: f64,
-    shorthand_calls: Option<(String,String)>,
+    shorthand_calls: Option<(String, String)>,
 }
 
 impl Default for ScanState {
@@ -173,8 +173,7 @@ fn decode_block(
     }
     let fac = 1.0 / rms;
     let d_norm: Vec<f32> = d.iter().map(|&x| x * fac).collect();
-    let cdat=analytic_signal_with_coefficients(
-        &d_norm,state.equalizer.coefficients());
+    let cdat = analytic_signal_with_coefficients(&d_norm, state.equalizer.coefficients());
 
     // Per-frame power, rescaled back to the original signal scale
     // (`mskrtd.f90:110-117`).
@@ -205,11 +204,16 @@ fn decode_block(
     if let Some(spd) = stage_a {
         #[cfg(feature = "std")]
         TRACE_STAGE_A_SUCCESS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        let decoded=finish_decode(spd.message,pmax,state,spd.tdec_sec,spd.fest);
-        if let Some(ref accepted)=decoded {
-            state.equalizer.observe(&spd.aligned_frame,&spd.info77,&accepted.message,
-                spd.hard_errors,accepted.snr_db as f32,
-                state.block_time_s+spd.tdec_sec as f64);
+        let decoded = finish_decode(spd.message, pmax, state, spd.tdec_sec, spd.fest);
+        if let Some(ref accepted) = decoded {
+            state.equalizer.observe(
+                &spd.aligned_frame,
+                &spd.info77,
+                &accepted.message,
+                spd.hard_errors,
+                accepted.snr_db as f32,
+                state.block_time_s + spd.tdec_sec as f64,
+            );
         }
         return decoded;
     }
@@ -218,9 +222,9 @@ fn decode_block(
     // before the longer 72 ms Stage B. Explicit known-call context is
     // mandatory for the 12-bit shorthand hash, otherwise a random hash
     // would be promoted to an unverified DX station identity.
-    if let Some((call1,call2))=state.shorthand_calls.as_ref() {
-        if let Some(short)=msk40::decode_analytic(cbig,fc,ntol,call1,call2) {
-            return finish_decode(short.message,pmax,state,short.t_sec,short.frequency_hz);
+    if let Some((call1, call2)) = state.shorthand_calls.as_ref() {
+        if let Some(short) = msk40::decode_analytic(cbig, fc, ntol, call1, call2) {
+            return finish_decode(short.message, pmax, state, short.t_sec, short.frequency_hz);
         }
     }
 
@@ -263,11 +267,17 @@ fn decode_block(
                         );
                     }
                     let tdec_sec = XMC[iavg] * tframe;
-                    let decoded=finish_decode(result.message,pmax,state,tdec_sec,sync_result.fest);
-                    if let Some(ref accepted)=decoded {
-                        state.equalizer.observe(&aligned,&result.info77,&accepted.message,
-                            result.hard_errors,accepted.snr_db as f32,
-                            state.block_time_s+tdec_sec as f64);
+                    let decoded =
+                        finish_decode(result.message, pmax, state, tdec_sec, sync_result.fest);
+                    if let Some(ref accepted) = decoded {
+                        state.equalizer.observe(
+                            &aligned,
+                            &result.info77,
+                            &accepted.message,
+                            result.hard_errors,
+                            accepted.snr_db as f32,
+                            state.block_time_s + tdec_sec as f64,
+                        );
                     }
                     return decoded;
                 }
@@ -510,7 +520,7 @@ impl Stream {
             while self.base + self.buf.len() as u64 >= self.next + BLOCK_SIZE as u64 {
                 let off = (self.next - self.base) as usize;
                 let block = &self.buf[off..off + BLOCK_SIZE];
-                self.state.block_time_s=self.next as f64 / 12_000.0;
+                self.state.block_time_s = self.next as f64 / 12_000.0;
                 if let Some(r) = decode_block(
                     block,
                     self.fc,
@@ -537,24 +547,29 @@ impl Stream {
     /// Enable or disable 40 ms shorthand decoding for exactly one
     /// known callsign pair. Clearing this context also prevents the
     /// otherwise expensive timing/frequency sync search from running.
-    pub fn configure_shorthand(&mut self, enabled:bool,call1:&str,call2:&str){
-        let a=call1.trim().to_ascii_uppercase();
-        let b=call2.trim().to_ascii_uppercase();
-        self.state.shorthand_calls=if enabled
-            && (3..=12).contains(&a.len()) && (3..=12).contains(&b.len())
-            && a.bytes().chain(b.bytes()).all(|v|
-                v.is_ascii_uppercase() || v.is_ascii_digit() || v==b'/') {
-            Some((a,b))
-        }else {None};
+    pub fn configure_shorthand(&mut self, enabled: bool, call1: &str, call2: &str) {
+        let a = call1.trim().to_ascii_uppercase();
+        let b = call2.trim().to_ascii_uppercase();
+        self.state.shorthand_calls = if enabled
+            && (3..=12).contains(&a.len())
+            && (3..=12).contains(&b.len())
+            && a.bytes()
+                .chain(b.bytes())
+                .all(|v| v.is_ascii_uppercase() || v.is_ascii_digit() || v == b'/')
+        {
+            Some((a, b))
+        } else {
+            None
+        };
     }
 
     /// Configure guarded WSJT-X style adaptive receiver equalization.
     /// A blank target disables it; a different target resets training.
-    pub fn configure_equalizer(&mut self, enabled:bool, dx_call:&str) {
-        self.state.equalizer.configure(enabled,dx_call);
+    pub fn configure_equalizer(&mut self, enabled: bool, dx_call: &str) {
+        self.state.equalizer.configure(enabled, dx_call);
     }
 
-    pub fn equalizer_status(&self)->AdaptiveEqualizerStatus {
+    pub fn equalizer_status(&self) -> AdaptiveEqualizerStatus {
         self.state.equalizer.status()
     }
 

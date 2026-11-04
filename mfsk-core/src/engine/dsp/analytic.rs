@@ -67,7 +67,8 @@ pub fn analytic_signal(input: &[f32]) -> Vec<Complex32> {
 /// cubic and quartic terms are applied (the constant and linear components
 /// are carrier phase/time offset, not an equalizer).
 pub fn analytic_signal_with_coefficients(
-    input: &[f32], coefficients: Option<&[f64;5]>,
+    input: &[f32],
+    coefficients: Option<&[f64; 5]>,
 ) -> Vec<Complex32> {
     let n = input.len();
     let mut planner = default_planner();
@@ -83,15 +84,15 @@ pub fn analytic_signal_with_coefficients(
     } else {
         None
     };
-    let phase_correction = |k:usize| {
-        if let Some(c)=coefficients {
-            let x=(k as f64 * df as f64 - FILTER_CENTER_HZ as f64)/1000.0;
-            let phi=x*x*(c[2]+x*(c[3]+x*c[4]));
-            if phi.is_finite() && phi.abs()<=10.0 {
-                return Complex32::new((phi as f32).cos(),(phi as f32).sin());
+    let phase_correction = |k: usize| {
+        if let Some(c) = coefficients {
+            let x = (k as f64 * df as f64 - FILTER_CENTER_HZ as f64) / 1000.0;
+            let phi = x * x * (c[2] + x * (c[3] + x * c[4]));
+            if phi.is_finite() && phi.abs() <= 10.0 {
+                return Complex32::new((phi as f32).cos(), (phi as f32).sin());
             }
         }
-        Complex32::new(1.0,0.0)
+        Complex32::new(1.0, 0.0)
     };
     for (k, xv) in x.iter_mut().enumerate() {
         if k == 0 || Some(k) == nyquist {
@@ -148,23 +149,26 @@ mod tests {
     /// this port now applies.
     #[test]
     fn adaptive_coefficients_rotate_only_the_passband_phase() {
-        let n=1200usize;
-        let tone:Vec<f32>=(0..n).map(|i|{
-            (core::f32::consts::TAU*2300.0*i as f32/12_000.0).cos()
-        }).collect();
-        let original=analytic_signal(&tone);
-        let corrected=analytic_signal_with_coefficients(&tone,Some(&[0.0,0.0,0.4,0.0,0.0]));
-        let mut planner=default_planner();
-        let fft=planner.plan_forward(n);
-        let mut a=original;
-        let mut b=corrected;
+        let n = 1200usize;
+        let tone: Vec<f32> = (0..n)
+            .map(|i| (core::f32::consts::TAU * 2300.0 * i as f32 / 12_000.0).cos())
+            .collect();
+        let original = analytic_signal(&tone);
+        let corrected = analytic_signal_with_coefficients(&tone, Some(&[0.0, 0.0, 0.4, 0.0, 0.0]));
+        let mut planner = default_planner();
+        let fft = planner.plan_forward(n);
+        let mut a = original;
+        let mut b = corrected;
         fft.process(&mut a);
         fft.process(&mut b);
-        let ratio=b[230]/a[230];
-        let expected=0.4*(0.8f32*0.8);
-        assert!((ratio.norm()-1.0).abs()<1e-3);
-        assert!((ratio.arg()-expected).abs()<1e-3,
-            "phase deviation {}",ratio.arg()-expected);
+        let ratio = b[230] / a[230];
+        let expected = 0.4 * (0.8f32 * 0.8);
+        assert!((ratio.norm() - 1.0).abs() < 1e-3);
+        assert!(
+            (ratio.arg() - expected).abs() < 1e-3,
+            "phase deviation {}",
+            ratio.arg() - expected
+        );
     }
 
     #[test]

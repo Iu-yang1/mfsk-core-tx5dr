@@ -17,10 +17,10 @@
 
 #[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
 pub mod decode;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod equalizer;
 pub mod frame_decode;
 pub mod msk40;
-#[cfg(any(feature="fft-rustfft",feature="fft-extern"))]
-pub mod equalizer;
 #[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
 pub mod spd;
 pub mod sync;
