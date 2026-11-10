@@ -3563,7 +3563,7 @@ mod upstream_packer_fidelity_tests {
         // slot A is unresolved, slot B carries the complete callsign,
         // slot C gets the call preloaded into a new decoding state.
         let mut hashed = pack77("BG5JSU", "5TB3Z", "R-12").expect("packed reply");
-        let token = NTOKENS + super::hash_table::ihashcall("5TB3Z", 22);
+        let token = NTOKENS + crate::msg::hash_table::ihashcall("5TB3Z", 22);
         for i in 0..28 {
             hashed[29 + i] = ((token >> (27 - i)) & 1) as u8;
         }
@@ -3574,6 +3574,9 @@ mod upstream_packer_fidelity_tests {
         for call in callsigns_in_message(&standard) {
             first_slot.insert(&call);
         }
+        assert!(unpack77_with_hash(&hashed, &first_slot)
+            .expect("learned within a receiver")
+            .contains("<5TB3Z>"));
         let mut next_slot = CallsignHashTable::new();
         for call in callsigns_in_message(&standard) {
             next_slot.insert(&call);
