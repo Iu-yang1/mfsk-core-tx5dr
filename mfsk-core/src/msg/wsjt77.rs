@@ -3558,5 +3558,27 @@ mod upstream_packer_fidelity_tests {
         let free = pack77_free_text("HELLO WORLD").expect("packed text");
         assert!(callsigns_in_message(&free).is_empty());
         assert!(callsigns_in_message(&standard[..76]).is_empty());
+
+        // A deterministic 77-bit 22-bit-hash packet, not a text replacement:
+        // slot A is unresolved, slot B carries the complete callsign,
+        // slot C gets the call preloaded into a new decoding state.
+        let mut hashed = pack77("BG5JSU", "5TB3Z", "R-12").expect("packed reply");
+        let token = NTOKENS + super::hash_table::ihashcall("5TB3Z", 22);
+        for i in 0..28 {
+            hashed[29 + i] = ((token >> (27 - i)) & 1) as u8;
+        }
+        let mut first_slot = CallsignHashTable::new();
+        assert!(unpack77_with_hash(&hashed, &first_slot)
+            .expect("valid hashed reply")
+            .contains("<...>"));
+        for call in callsigns_in_message(&standard) {
+            first_slot.insert(&call);
+        }
+        let mut next_slot = CallsignHashTable::new();
+        for call in callsigns_in_message(&standard) {
+            next_slot.insert(&call);
+        }
+        let restored = unpack77_with_hash(&hashed, &next_slot).expect("replayed hashed reply");
+        assert!(restored.contains("<5TB3Z>"), "{restored}");
     }
 }
