@@ -558,9 +558,9 @@ pub fn unpack77_learn(msg: &[u8], ht: &mut CallsignHashTable) -> Option<String> 
     // Resolve first, learn second: a message must not be allowed to
     // resolve its own hash field against a call it is itself
     // introducing. WSJT-X has the same ordering for the same reason.
-    let text = unpack77_with_hash(msg, ht);
+    let text = unpack77_with_hash(msg, ht)?;
     register_callsigns(msg, ht);
-    text
+    Some(text)
 }
 
 /// Register the callsign fields of a 77-bit message into `ht`.
@@ -583,17 +583,30 @@ pub fn unpack77_learn(msg: &[u8], ht: &mut CallsignHashTable) -> Option<String> 
 /// low tokens, so every candidate is filtered through
 /// [`is_standard_callsign`]; the nonstandard call is registered as-is,
 /// which is the whole point of it.
+/// Extract only the complete callsign fields of a successfully unpacked
+/// 77-bit message. The caller must first have accepted the FEC/CRC result;
+/// neither free text nor placeholders are interpreted as callsigns.
+pub fn callsigns_in_message(msg: &[u8]) -> Vec<String> {
+    let mut calls = Vec::new();
+    visit_callsign_fields(msg, |call| calls.push(call.to_string()));
+    calls
+}
+
 pub fn register_callsigns(msg: &[u8], ht: &mut CallsignHashTable) {
-    if msg.len() != 77 {
+    visit_callsign_fields(msg, |call| ht.insert(call));
+}
+
+fn visit_callsign_fields(msg: &[u8], mut record: impl FnMut(&str)) {
+    if msg.len() != 77 || unpack77(msg).is_none() {
         return;
     }
     let n3 = read_bits(msg, 71, 3);
     let i3 = read_bits(msg, 74, 3);
 
-    let learn_std = |n28: u32, ht: &mut CallsignHashTable| {
+    let learn_std = |n28: u32, emit: &mut dyn FnMut(&str)| {
         let Some(call) = unpack28(n28) else { return };
         if is_standard_callsign(&call) {
-            ht.insert(&call);
+            emit(&call);
         }
     };
 
@@ -602,8 +615,8 @@ pub fn register_callsigns(msg: &[u8], ht: &mut CallsignHashTable) {
             // DXpedition and Field Day both carry two 28-bit calls at
             // the same offsets; free text (n3 = 0) carries none.
             1 | 3 | 4 => {
-                learn_std(read_bits(msg, 0, 28), ht);
-                learn_std(read_bits(msg, 28, 28), ht);
+                learn_std(read_bits(msg, 0, 28), &mut record);
+                learn_std(read_bits(msg, 28, 28), &mut record);
             }
             _ => {}
         },
@@ -611,24 +624,24 @@ pub fn register_callsigns(msg: &[u8], ht: &mut CallsignHashTable) {
             // The flag after each call is /R (type 1) or /P (type 2); upstream saves the call
             // with that suffix (rc1 `packjt77.f90:1755-1765`), and a later `<CALL/P>` hash names it.
             let suffix = if i3 == 1 { "/R" } else { "/P" };
-            let learn_with_flag = |n28: u32, flag_at: usize, ht: &mut CallsignHashTable| {
+            let learn_with_flag = |n28: u32, flag_at: usize, emit: &mut dyn FnMut(&str)| {
                 let Some(call) = unpack28(n28) else { return };
                 if is_standard_callsign(&call) {
                     if read_bits(msg, flag_at, 1) == 1 {
-                        ht.insert(&format!("{call}{suffix}"));
+                        emit(&format!("{call}{suffix}"));
                     } else {
-                        ht.insert(&call);
+                        emit(&call);
                     }
                 }
             };
-            learn_with_flag(read_bits(msg, 0, 28), 28, ht);
-            learn_with_flag(read_bits(msg, 29, 28), 57, ht);
+            learn_with_flag(read_bits(msg, 0, 28), 28, &mut record);
+            learn_with_flag(read_bits(msg, 29, 28), 57, &mut record);
         }
         // ARRL RTTY Roundup: one bit of ITU flag first, so the fields
         // sit at 1 and 29 rather than 0 and 28.
         3 => {
-            learn_std(read_bits(msg, 1, 28), ht);
-            learn_std(read_bits(msg, 29, 28), ht);
+            learn_std(read_bits(msg, 1, 28), &mut record);
+            learn_std(read_bits(msg, 29, 28), &mut record);
         }
         // Nonstandard call. The 12-bit field is a *hash* of the other
         // station and carries no callsign to learn; the 58-bit field
@@ -646,7 +659,7 @@ pub fn register_callsigns(msg: &[u8], ht: &mut CallsignHashTable) {
                 // Two characters is `insert`'s own floor; below it
                 // there is nothing a hash could usefully name.
                 if call.len() >= 2 {
-                    ht.insert(call);
+                    record(call);
                 }
             }
         }
@@ -3537,4 +3550,14 @@ mod upstream_packer_fidelity_tests {
         assert_eq!(unpack77(&bits).unwrap(), "K1ABC TNEW FN");
         assert!(pack77_q65_list_message("K1ABC", "<JA1AB", "FN42").is_none());
     }
+    #[test]
+    fn extract_trusted_callsign_fields_only() {
+        let standard = pack77("BG5JSU", "5TB3Z", "-13").expect("packed standard call");
+        let calls = callsigns_in_message(&standard);
+        assert_eq!(calls, alloc::vec!["BG5JSU", "5TB3Z"]);
+        let free = pack77_free_text("HELLO WORLD").expect("packed text");
+        assert!(callsigns_in_message(&free).is_empty());
+        assert!(callsigns_in_message(&standard[..76]).is_empty());
+    }
+
 }
