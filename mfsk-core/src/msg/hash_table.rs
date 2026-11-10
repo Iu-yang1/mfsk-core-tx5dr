@@ -191,6 +191,13 @@ pub struct CallsignHashTable {
     calls22: Option<Vec<Call13>>,
     #[cfg(not(feature = "hash-table-small"))]
     hash22: Option<Vec<u32>>,
+    /// Sticky ambiguity markers for colliding short hashes.
+    #[cfg(not(feature = "hash-table-small"))]
+    ambiguous10: Option<Vec<bool>>,
+    #[cfg(not(feature = "hash-table-small"))]
+    ambiguous12: Option<Vec<bool>>,
+    /// Full-width collisions are rare, but must not resolve to a wrong call.
+    ambiguous22: Vec<u32>,
     /// The unified LRU, most recent first.
     #[cfg(feature = "hash-table-small")]
     entries: Option<Vec<Entry>>,
@@ -210,6 +217,11 @@ impl CallsignHashTable {
             calls22: None,
             #[cfg(not(feature = "hash-table-small"))]
             hash22: None,
+            #[cfg(not(feature = "hash-table-small"))]
+            ambiguous10: None,
+            #[cfg(not(feature = "hash-table-small"))]
+            ambiguous12: None,
+            ambiguous22: Vec::new(),
             #[cfg(feature = "hash-table-small")]
             entries: None,
             n22: 0,
@@ -257,6 +269,8 @@ impl CallsignHashTable {
                 self.calls12 = Some(alloc::vec![Call13::EMPTY; N_HASH12]);
                 self.calls22 = Some(alloc::vec![Call13::EMPTY; MAX_HASH22]);
                 self.hash22 = Some(alloc::vec![0u32; MAX_HASH22]);
+                self.ambiguous10 = Some(alloc::vec![false; N_HASH10]);
+                self.ambiguous12 = Some(alloc::vec![false; N_HASH12]);
             }
             // `ihashcall` returns the top `m` bits, so these are in
             // range by construction; the guard mirrors
@@ -265,11 +279,23 @@ impl CallsignHashTable {
             if let Some(t) = self.calls10.as_mut()
                 && let Some(slot) = t.get_mut(n10 as usize)
             {
+                if !slot.is_empty()
+                    && *slot != entry
+                    && let Some(flags) = self.ambiguous10.as_mut()
+                {
+                    flags[n10 as usize] = true;
+                }
                 *slot = entry;
             }
             if let Some(t) = self.calls12.as_mut()
                 && let Some(slot) = t.get_mut(n12 as usize)
             {
+                if !slot.is_empty()
+                    && *slot != entry
+                    && let Some(flags) = self.ambiguous12.as_mut()
+                {
+                    flags[n12 as usize] = true;
+                }
                 *slot = entry;
             }
             // 22-bit LRU, `packjt77.f90:99-112`: refresh in place if
@@ -279,6 +305,12 @@ impl CallsignHashTable {
                 return;
             };
             if let Some(pos) = hashes[..self.n22].iter().position(|&h| h == n22) {
+                if calls[pos] != entry
+                    && !self.ambiguous22.contains(&n22)
+                    && self.ambiguous22.len() < MAX_HASH22
+                {
+                    self.ambiguous22.push(n22);
+                }
                 calls[pos] = entry;
                 hashes[..=pos].rotate_right(1);
                 calls[..=pos].rotate_right(1);
@@ -316,6 +348,12 @@ impl CallsignHashTable {
             // the 22-bit hash: it is the widest, so two callsigns
             // sharing it is 1-in-4M rather than 1-in-1024.
             if let Some(pos) = t[..self.n22].iter().position(|e| e.h22 == n22) {
+                if t[pos].call != entry
+                    && !self.ambiguous22.contains(&n22)
+                    && self.ambiguous22.len() < N_ENTRIES
+                {
+                    self.ambiguous22.push(n22);
+                }
                 t[pos] = new;
                 t[..=pos].rotate_right(1);
                 return;
@@ -341,6 +379,9 @@ impl CallsignHashTable {
     pub fn lookup10(&self, n10: u32) -> Option<&str> {
         #[cfg(not(feature = "hash-table-small"))]
         {
+            if self.ambiguous10.as_ref()?.get(n10 as usize) == Some(&true) {
+                return None;
+            }
             let e = self.calls10.as_ref()?.get(n10 as usize)?;
             (!e.is_empty()).then(|| e.as_str())
         }
@@ -354,6 +395,9 @@ impl CallsignHashTable {
     pub fn lookup12(&self, n12: u32) -> Option<&str> {
         #[cfg(not(feature = "hash-table-small"))]
         {
+            if self.ambiguous12.as_ref()?.get(n12 as usize) == Some(&true) {
+                return None;
+            }
             let e = self.calls12.as_ref()?.get(n12 as usize)?;
             (!e.is_empty()).then(|| e.as_str())
         }
@@ -372,6 +416,9 @@ impl CallsignHashTable {
     /// caught it. All three return the same shape now; the callers
     /// that want `<>` add it.
     pub fn lookup22(&self, n22: u32) -> Option<&str> {
+        if self.ambiguous22.contains(&n22) {
+            return None;
+        }
         #[cfg(not(feature = "hash-table-small"))]
         {
             let hashes = self.hash22.as_ref()?;
@@ -392,10 +439,15 @@ impl CallsignHashTable {
     #[cfg(feature = "hash-table-small")]
     fn scan(&self, pred: impl Fn(&Entry) -> bool) -> Option<&str> {
         let t = self.entries.as_ref()?;
-        t[..self.n22]
+        let mut matches = t[..self.n22]
             .iter()
-            .find(|e| !e.call.is_empty() && pred(e))
-            .map(|e| e.call.as_str())
+            .filter(|e| !e.call.is_empty() && pred(e));
+        let first = matches.next()?;
+        // No arbitrary winner when two live calls share a short hash.
+        if matches.any(|e| e.call != first.call) {
+            return None;
+        }
+        Some(first.call.as_str())
     }
 
     /// Clear all entries, keeping the blocks for reuse.
@@ -417,6 +469,16 @@ impl CallsignHashTable {
                 e.call = Call13::EMPTY;
             }
         }
+        #[cfg(not(feature = "hash-table-small"))]
+        {
+            if let Some(flags) = self.ambiguous10.as_mut() {
+                flags.fill(false);
+            }
+            if let Some(flags) = self.ambiguous12.as_mut() {
+                flags.fill(false);
+            }
+        }
+        self.ambiguous22.clear();
         self.n22 = 0;
     }
 
@@ -726,5 +788,52 @@ mod tests {
         t.insert("JA1ABC/P");
         assert_eq!(t.lookup22(ihashcall("JA1ABC/P", 22)), Some("JA1ABC/P"));
         assert_eq!(t.lookup22(ihashcall("JA1ABC", 22)), None);
+    }
+    #[test]
+    fn ambiguous_short_hashes_do_not_choose_an_arbitrary_callsign() {
+        for width in [10, 12] {
+            let mut table = CallsignHashTable::new();
+            let mut found = alloc::collections::BTreeMap::<u32, alloc::string::String>::new();
+            let pair = (0..20_000)
+                .find_map(|i| {
+                    let call = alloc::format!("K{:05}", i);
+                    let hash = ihashcall(&call, width);
+                    if let Some(previous) = found.get(&hash) {
+                        Some((previous.clone(), call, hash))
+                    } else {
+                        found.insert(hash, call);
+                        None
+                    }
+                })
+                .expect("short-hash collision");
+            table.insert(&pair.0);
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                Some(pair.0.as_str())
+            );
+            table.insert(&pair.1);
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                None
+            );
+            table.clear();
+            table.insert(&pair.1);
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                Some(pair.1.as_str())
+            );
+        }
     }
 }
