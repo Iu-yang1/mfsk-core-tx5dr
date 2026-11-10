@@ -3573,15 +3573,19 @@ mod upstream_packer_fidelity_tests {
             hashed[29 + i] = ((token >> (27 - i)) & 1) as u8;
         }
         let mut first_slot = CallsignHashTable::new();
-        assert!(unpack77_with_hash(&hashed, &first_slot)
-            .expect("valid hashed reply")
-            .contains("<...>"));
+        assert!(
+            unpack77_with_hash(&hashed, &first_slot)
+                .expect("valid hashed reply")
+                .contains("<...>")
+        );
         for call in callsigns_in_message(&nonstandard) {
             first_slot.insert(&call);
         }
-        assert!(unpack77_with_hash(&hashed, &first_slot)
-            .expect("learned within a receiver")
-            .contains("<5TB3Z>"));
+        assert!(
+            unpack77_with_hash(&hashed, &first_slot)
+                .expect("learned within a receiver")
+                .contains("<5TB3Z>")
+        );
         let mut next_slot = CallsignHashTable::new();
         for call in callsigns_in_message(&nonstandard) {
             next_slot.insert(&call);
