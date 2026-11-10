@@ -3559,5 +3559,4 @@ mod upstream_packer_fidelity_tests {
         assert!(callsigns_in_message(&free).is_empty());
         assert!(callsigns_in_message(&standard[..76]).is_empty());
     }
-
 }
