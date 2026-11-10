@@ -3552,9 +3552,14 @@ mod upstream_packer_fidelity_tests {
     }
     #[test]
     fn extract_trusted_callsign_fields_only() {
-        let standard = pack77("BG5JSU", "5TB3Z", "-13").expect("packed standard call");
+        let standard = pack77("BG5JSU", "K1ABC", "-13").expect("packed standard call");
         let calls = callsigns_in_message(&standard);
-        assert_eq!(calls, alloc::vec!["BG5JSU", "5TB3Z"]);
+        assert_eq!(calls, alloc::vec!["BG5JSU", "K1ABC"]);
+        // 5TB3Z is not packable as a regular Type-1 standard call; its
+        // complete nonstandard callsign is carried in a Type-4 58-bit field.
+        let nonstandard = pack77_type4("5TB3Z", "BG5JSU", "", false)
+            .expect("packed nonstandard callsign");
+        assert_eq!(callsigns_in_message(&nonstandard), alloc::vec!["5TB3Z"]);
         let free = pack77_free_text("HELLO WORLD").expect("packed text");
         assert!(callsigns_in_message(&free).is_empty());
         assert!(callsigns_in_message(&standard[..76]).is_empty());
@@ -3562,7 +3567,7 @@ mod upstream_packer_fidelity_tests {
         // A deterministic 77-bit 22-bit-hash packet, not a text replacement:
         // slot A is unresolved, slot B carries the complete callsign,
         // slot C gets the call preloaded into a new decoding state.
-        let mut hashed = pack77("BG5JSU", "5TB3Z", "R-12").expect("packed reply");
+        let mut hashed = pack77("BG5JSU", "K1ABC", "R-12").expect("packed reply");
         let token = NTOKENS + crate::msg::hash_table::ihashcall("5TB3Z", 22);
         for i in 0..28 {
             hashed[29 + i] = ((token >> (27 - i)) & 1) as u8;
@@ -3571,14 +3576,14 @@ mod upstream_packer_fidelity_tests {
         assert!(unpack77_with_hash(&hashed, &first_slot)
             .expect("valid hashed reply")
             .contains("<...>"));
-        for call in callsigns_in_message(&standard) {
+        for call in callsigns_in_message(&nonstandard) {
             first_slot.insert(&call);
         }
         assert!(unpack77_with_hash(&hashed, &first_slot)
             .expect("learned within a receiver")
             .contains("<5TB3Z>"));
         let mut next_slot = CallsignHashTable::new();
-        for call in callsigns_in_message(&standard) {
+        for call in callsigns_in_message(&nonstandard) {
             next_slot.insert(&call);
         }
         let restored = unpack77_with_hash(&hashed, &next_slot).expect("replayed hashed reply");
