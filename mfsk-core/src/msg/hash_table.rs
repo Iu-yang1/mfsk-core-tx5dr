@@ -303,7 +303,8 @@ impl CallsignHashTable {
                 return;
             };
             if let Some(pos) = hashes[..self.n22].iter().position(|&h| h == n22) {
-                if calls[pos] != entry && !self.ambiguous22.contains(&n22)
+                if calls[pos] != entry
+                    && !self.ambiguous22.contains(&n22)
                     && self.ambiguous22.len() < MAX_HASH22
                 {
                     self.ambiguous22.push(n22);
@@ -345,7 +346,8 @@ impl CallsignHashTable {
             // the 22-bit hash: it is the widest, so two callsigns
             // sharing it is 1-in-4M rather than 1-in-1024.
             if let Some(pos) = t[..self.n22].iter().position(|e| e.h22 == n22) {
-                if t[pos].call != entry && !self.ambiguous22.contains(&n22)
+                if t[pos].call != entry
+                    && !self.ambiguous22.contains(&n22)
                     && self.ambiguous22.len() < N_ENTRIES
                 {
                     self.ambiguous22.push(n22);
@@ -435,7 +437,8 @@ impl CallsignHashTable {
     #[cfg(feature = "hash-table-small")]
     fn scan(&self, pred: impl Fn(&Entry) -> bool) -> Option<&str> {
         let t = self.entries.as_ref()?;
-        let mut matches = t[..self.n22].iter()
+        let mut matches = t[..self.n22]
+            .iter()
             .filter(|e| !e.call.is_empty() && pred(e));
         let first = matches.next()?;
         // No arbitrary winner when two live calls share a short hash.
@@ -466,8 +469,12 @@ impl CallsignHashTable {
         }
         #[cfg(not(feature = "hash-table-small"))]
         {
-            if let Some(flags) = self.ambiguous10.as_mut() { flags.fill(false); }
-            if let Some(flags) = self.ambiguous12.as_mut() { flags.fill(false); }
+            if let Some(flags) = self.ambiguous10.as_mut() {
+                flags.fill(false);
+            }
+            if let Some(flags) = self.ambiguous12.as_mut() {
+                flags.fill(false);
+            }
         }
         self.ambiguous22.clear();
         self.n22 = 0;
@@ -784,25 +791,47 @@ mod tests {
     fn ambiguous_short_hashes_do_not_choose_an_arbitrary_callsign() {
         for width in [10, 12] {
             let mut table = CallsignHashTable::new();
-            let mut found = alloc::collections::BTreeMap::new();
-            let pair = (0..20_000).find_map(|i| {
-                let call = alloc::format!("K{:05}", i);
-                let hash = ihashcall(&call, width);
-                if let Some(previous) = found.get(&hash) {
-                    Some((previous.clone(), call, hash))
-                } else {
-                    found.insert(hash, call);
-                    None
-                }
-            }).expect("short-hash collision");
+            let mut found = alloc::collections::BTreeMap::<u32, alloc::string::String>::new();
+            let pair = (0..20_000)
+                .find_map(|i| {
+                    let call = alloc::format!("K{:05}", i);
+                    let hash = ihashcall(&call, width);
+                    if let Some(previous) = found.get(&hash) {
+                        Some((previous.clone(), call, hash))
+                    } else {
+                        found.insert(hash, call);
+                        None
+                    }
+                })
+                .expect("short-hash collision");
             table.insert(&pair.0);
-            assert_eq!(if width == 10 { table.lookup10(pair.2) } else { table.lookup12(pair.2) }, Some(pair.0.as_str()));
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                Some(pair.0.as_str())
+            );
             table.insert(&pair.1);
-            assert_eq!(if width == 10 { table.lookup10(pair.2) } else { table.lookup12(pair.2) }, None);
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                None
+            );
             table.clear();
             table.insert(&pair.1);
-            assert_eq!(if width == 10 { table.lookup10(pair.2) } else { table.lookup12(pair.2) }, Some(pair.1.as_str()));
+            assert_eq!(
+                if width == 10 {
+                    table.lookup10(pair.2)
+                } else {
+                    table.lookup12(pair.2)
+                },
+                Some(pair.1.as_str())
+            );
         }
     }
-
 }
