@@ -3557,8 +3557,8 @@ mod upstream_packer_fidelity_tests {
         assert_eq!(calls, alloc::vec!["BG5JSU", "K1ABC"]);
         // 5TB3Z is not packable as a regular Type-1 standard call; its
         // complete nonstandard callsign is carried in a Type-4 58-bit field.
-        let nonstandard = pack77_type4("5TB3Z", "BG5JSU", "", false)
-            .expect("packed nonstandard callsign");
+        let nonstandard =
+            pack77_type4("5TB3Z", "BG5JSU", "", false).expect("packed nonstandard callsign");
         assert_eq!(callsigns_in_message(&nonstandard), alloc::vec!["5TB3Z"]);
         let free = pack77_free_text("HELLO WORLD").expect("packed text");
         assert!(callsigns_in_message(&free).is_empty());
