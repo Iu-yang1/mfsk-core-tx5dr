@@ -279,7 +279,8 @@ impl CallsignHashTable {
             if let Some(t) = self.calls10.as_mut()
                 && let Some(slot) = t.get_mut(n10 as usize)
             {
-                if !slot.is_empty() && *slot != entry
+                if !slot.is_empty()
+                    && *slot != entry
                     && let Some(flags) = self.ambiguous10.as_mut()
                 {
                     flags[n10 as usize] = true;
@@ -289,7 +290,8 @@ impl CallsignHashTable {
             if let Some(t) = self.calls12.as_mut()
                 && let Some(slot) = t.get_mut(n12 as usize)
             {
-                if !slot.is_empty() && *slot != entry
+                if !slot.is_empty()
+                    && *slot != entry
                     && let Some(flags) = self.ambiguous12.as_mut()
                 {
                     flags[n12 as usize] = true;
