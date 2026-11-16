@@ -231,12 +231,19 @@ public struct ModeInfo: Sendable {
     public let slotSeconds: Float
     /// Slot length in samples at 12 kHz — ``slotSeconds`` made exact.
     public let slotSamples12k: UInt32
-    /// Seconds from the start of the slot buffer to the first frame
-    /// symbol, i.e. the `dt = 0` reference. 0.5 for FT8, FT4 and
-    /// FST4-15; 1.0 for the other FST4 sub-modes. A host that
-    /// synthesises a slot has to know this — see
-    /// ``Mode/synthesiseSlot(_:frequencyHz:amplitude:)``.
+    /// Seconds from the start of the slot to the first tone symbol of a
+    /// frame at DT = 0, the reference decoded DTs are measured from. 0.5
+    /// for FT8, FT4, FST4-15 and Q65-15/30; 1.0 for the other FST4
+    /// sub-modes, Q65 from 60 s, WSPR, JT9 and JT65. To place a
+    /// transmission use ``txBufferStartSamples12k``.
     public let txStartOffsetSeconds: Float
+    /// Where a synthesised frame goes: the sample of the slot (12 kHz) its
+    /// first sample goes to, where WSJT-X's own transmitter starts it. For
+    /// every mode but FT4 the frame then lands at DT = 0; FT4 is 3600
+    /// (300 ms, as WSJT-X; its tones decode at DT -0.152 s over a chain
+    /// with no latency). 0 for JTTY and MSK144. See
+    /// ``Mode/synthesiseSlot(_:frequencyHz:amplitude:)``.
+    public let txBufferStartSamples12k: UInt32
     /// FEC information bits — 91 (CRC-14) or 101 (CRC-24).
     public let fecK: UInt32
     public let fecN: UInt32
@@ -264,6 +271,7 @@ public struct ModeInfo: Sendable {
         self.slotSeconds = raw.t_slot_s
         self.slotSamples12k = raw.slot_samples_12k
         self.txStartOffsetSeconds = raw.tx_start_offset_s
+        self.txBufferStartSamples12k = raw.tx_buffer_start_samples_12k
         self.fecK = raw.fec_k
         self.fecN = raw.fec_n
         self.payloadBits = raw.payload_bits

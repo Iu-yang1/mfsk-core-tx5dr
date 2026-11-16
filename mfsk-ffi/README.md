@@ -107,14 +107,15 @@ int main() {
     mfsk_tones_to_i16(MFSK_MODE_FT8, tones.data(), nTones, 1500.0f, 8000,
                       frame.data(), frame.size(), &nPcm);
 
-    // 2. Place it in a full slot at the mode's own TX offset — ask,
-    //    rather than assume: FST4's five sub-modes differ here.
+    // 2. Place it in a full slot where the mode info says the buffer goes
+    //    — ask, rather than assume: FST4's sub-modes differ, and FT4's
+    //    buffer starts a ramp symbol before its tones.
     MfskModeInfo info;
     memset(&info, 0, sizeof info);
     info.size = sizeof info;
     mfsk_mode_info(MFSK_MODE_FT8, &info);
     std::vector<int16_t> slot(info.slot_samples_12k, 0);
-    const size_t at = static_cast<size_t>(info.tx_start_offset_s * 12000.0f);
+    const size_t at = info.tx_buffer_start_samples_12k;
     for (size_t i = 0; i < nPcm && at + i < slot.size(); ++i) slot[at + i] = frame[i];
 
     // 3. Decode it. `mfsk_params_init` writes the mode's defaults
@@ -174,7 +175,7 @@ specification.
 | `mfsk_abi_version` | The boundary's own revision (3). Moves when the C surface changes shape, unlike `mfsk_version`. |
 | `mfsk_mode_count` / `mfsk_mode_at` | Enumerate the modes **this build** supports; protocols are feature-gated. |
 | `mfsk_mode_name` / `mfsk_mode_from_name` | Round-trip a mode through its display name (`"FT8"`, `"FST4-120"`). |
-| `mfsk_mode_info` | Geometry: tones, symbols, slot samples, TX offset, slot-FFT size, capability word. Size-versioned. |
+| `mfsk_mode_info` | Geometry: tones, symbols, slot samples, the DT reference (`tx_start_offset_s`), where a synthesised buffer goes (`tx_buffer_start_samples_12k`), slot-FFT size, capability word. Size-versioned. |
 | `mfsk_mode_caps` | Just the capability word — the `MFSK_CAP_*` bits. |
 
 **Decoder — one handle for every slot mode** (FT8, FT4, FST4 ×7, FST4W ×4, WSPR, JT9, JT65, Q65 ×10)

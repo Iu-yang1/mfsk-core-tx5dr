@@ -326,9 +326,11 @@ pub trait FrameLayout: Copy + Default + 'static {
     /// GFSK ramp-up / ramp-down symbols that are a shaping artifact.
     const N_SYMBOLS: u32 = Self::N_DATA + Self::N_SYNC;
 
-    /// Extra symbol slots on each side of the frame reserved for amplitude
-    /// ramp (FT4 has 1 each side = 2; FT8 has 0 — ramp absorbed into the
-    /// first/last data symbol envelope). Applied at the transmitter.
+    /// Ramp symbols around the frame, both sides together (FT4: 2, one each side, as
+    /// `gen_ft4wave` builds; FT8 and every other mode: 0, the ramp inside the first and last
+    /// symbol). The transmitter's lead is `N_RAMP / 2` symbols
+    /// ([`synth_lead_samples`](crate::engine::tx::synth_lead_samples)); it must be 2 exactly when
+    /// the waveform is `Waveform::Ft4`, which is what synthesises those symbols.
     const N_RAMP: u32;
 
     /// Sync-symbol layout. Most WSJT protocols use `SyncMode::Block` with
@@ -345,6 +347,15 @@ pub trait FrameLayout: Copy + Default + 'static {
     /// of the first frame symbol — the "dt = 0" reference point used by
     /// sync, signal subtraction, and DT reporting. FT8 = 0.5, FT4 = 0.5.
     const TX_START_OFFSET_S: f32;
+
+    /// Where WSJT-X's transmitter starts this mode's audio, in milliseconds from the start of the
+    /// slot, when that is not where the frame lands at DT = 0: `Modulator::start`'s `delay_ms`
+    /// (`Modulator/Modulator.cpp:163-168`). `None` (the default) means it is the DT = 0 placement,
+    /// `TX_START_OFFSET_S` less the lead ramp, which is what upstream does for FT8 (500), FST4-15 and
+    /// Q65-15/30 (500) and every 1 s mode (1000). Only FT4 differs: `Some(300)`, ~150 ms ahead of
+    /// DT = 0 (upstream gives no reason in the source). Read through
+    /// [`tx_buffer_start`](crate::engine::tx::tx_buffer_start), not directly.
+    const TX_DELAY_MS: Option<u32> = None;
 
     /// Optional bit interleaver: permutation table such that
     /// `cw[CODEWORD_INTERLEAVE[j]]` is the codeword bit transmitted at

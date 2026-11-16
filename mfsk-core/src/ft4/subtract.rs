@@ -183,13 +183,14 @@ mod tests {
     fn subtract_with_exact_timing_near_zero() {
         let msg = [1u8; 77];
         let itone = crate::engine::tx::message_to_tones::<crate::ft4::Ft4>(&msg);
-        // FT4 frame: 103 active symbols × 576 samples = 59_328.
+        // FT4 frame: 103 tone symbols plus a ramp symbol each side, × 576 samples.
         // Target buffer: 7.5 s × 12 kHz = 90_000.
         let samples =
             crate::engine::tx::synthesize_i16::<crate::ft4::Ft4>(&itone, 12_000, 1500.0, 20_000);
 
         let mut audio = vec![0i16; 90_000];
-        let offset = 6_000usize; // 0.5 s start offset
+        // 0.5 s tone start; the frame's first symbol is a ramp symbol.
+        let offset = 6_000usize - 576;
         let len = samples.len().min(90_000 - offset);
         audio[offset..offset + len].copy_from_slice(&samples[..len]);
 
@@ -202,8 +203,12 @@ mod tests {
         subtract_signal(&mut audio, &result);
 
         let power_after: f64 = audio.iter().map(|&s| (s as f64).powi(2)).sum::<f64>();
+        // The reference is `gen_ft4wave`'s frame, which is what `synthesize::<Ft4>` transmits (#734): with
+        // the exact timing nothing is left but rounding to `i16` (it was -20.9 dB, the two ramp symbols,
+        // when the reference was `gen_ft8wave`'s form). This is the constant-amplitude LS path; the LPF
+        // path the decoder uses went from about -20 dB to -29 dB and has no test of its own.
         assert!(
-            power_after < power_before * 0.02,
+            power_after < power_before * 1e-4,
             "power before={power_before:.0} after={power_after:.0}"
         );
     }
@@ -218,7 +223,7 @@ mod tests {
             crate::engine::tx::synthesize_i16::<crate::ft4::Ft4>(&itone, 12_000, 1500.0, 15_000);
 
         let mut audio = vec![0i16; 90_000];
-        let offset = 6_000usize;
+        let offset = 6_000usize - 576;
         let len = samples.len().min(90_000 - offset);
         audio[offset..offset + len].copy_from_slice(&samples[..len]);
 

@@ -271,7 +271,7 @@ NULL を渡せば `_init` の値になる。
 | フィールド | 意味 | モード |
 |---|---|---|
 | `sync_min` | depth の値に対する sync しきい値。NaN は depth の値。**モード間で比較できない** | FT8、FT4、FST4 |
-| `max_cand` | depth の値に対する候補数の上限。0 は depth の値 | 全モード |
+| `max_cand` | depth の値に対する候補数の上限。0 は depth の値 | JT9 以外の全モード（JT9 は拒否する。JT9 のスキャンは `jt9` のもので、ビンは depth ごとの `ccflim` で選ばれる） |
 | `osd` | -1 は depth の値、0 オフ、1 オン | FT8、FT4、FST4 |
 | `strictness` | 受理/棄却プロファイル: -1 既定、0 strict、1 normal、2 deep | FT8、FT4、FST4 |
 | `strategy`, `sic_rounds` | `MFSK_STRATEGY_DEFAULT` 0、`_SINGLE_PASS` 1（1パス、減算なし）、`_SIC_ROUNDS` 2（`sic_rounds` ラウンド）、`_SIC_EARLY` 3（チェックポイント付きパス）。FT8 と FT4 は WSJT-X と同じく既定で減算する | FT8: 0–3、FT4: 0–2、FST4: 0–1（上流の `fst4_decode` に減算は無い） |
@@ -282,7 +282,7 @@ NULL を渡せば `_init` の値になる。
 | `has_ap_hint`, `ap_call1`, `ap_call2`, `ap_grid`, `ap_report` | QSO 文脈の AP とは別の自由形式のアプリオリヒント（指定されればそちらが勝つ）: メッセージのフィールドを順に。CQ なら `ap_call1` は `"CQ"`、`ap_report` は `"RRR"`、`"RR73"`、`"73"` か レポート | FT8、FT4、FST4、Q65 |
 | `nb_percent` | インパルスノイズブランカ（WSJT-X の **NB**）: スロット変換の前に、最も大きい `n` パーセントのサンプルを消す。0..=25、0 は何も消さない | FST4（`MFSK_CAP_NOISE_BLANKER`） |
 | `nb_sweep_step`, `nb_ftol_hz` | 0 以外（5、2、1）でブランキング水準 `0, step, 2*step, .. 20` パーセントごとに1回ずつデコードする。`nb_ftol_hz`（正の値、併用必須）はブランクしたパスの `rx_freq_hz` を中心とする半幅で、**Rx 周波数が無ければ 0 % のパスだけ**が走る。最大21回のデコード | FST4 |
-| `t_early_s`, `t_late_s`, `score_threshold` | 名目開始より何秒前/後からフレームが始まってよいか、および coarse-sync の受理値 0..1。NaN はモード自身の値 | WSPR、JT9、JT65、Q65 |
+| `t_early_s`, `t_late_s`, `score_threshold` | 名目開始より何秒前/後からフレームが始まってよいか、および coarse-sync の受理値 0..1。NaN はモード自身の値 | WSPR、JT65、Q65（JT9 は拒否する。`sync9` のラグ範囲は固定で、ゲートも独自） |
 | `max_cycles_per_bit` | ビットあたりの Fano サイクル数（`wsprd -C`）。0 は depth の値 | WSPR |
 | `chase_trials` | Chase の試行回数（`nvec`）。0 は depth の値 | JT65 |
 | `pileup` | **Q65 Pileup**: 両コールサインだけを指す AP ヒントは余りの78ビット目を空けておくので、"copied last Tx" フラグつきの返信もマッチする。AP ヒントが要る | Q65 |
@@ -422,6 +422,15 @@ WSPR 型（`i3=0, n3=6`）でない 77 ビットのメッセージは、そこ�
 サイズを決める。**定数を焼き込まずライブラリに訊くこと** — FST4 のサブモードは
 シンボルあたりサンプル数が 30 倍違う（720 → 21 504）ので、60A から取った定数は
 他のモードで静かに誤りになる（FST4-900 / -1800 と FST4W の各周期は 66 560 と 134 400 まで行く）。
+
+**バッファの置き場所:** `MfskModeInfo::tx_buffer_start_samples_12k`。バッファの先頭サンプルを置く
+スロット内のサンプル位置で、WSJT-X 自身の送信機が出し始める位置（`Modulator.cpp:163-168`、`delay_ms`）。
+FT8 は 6000、WSPR・JT9・JT65 を含む 1 秒のモードは 12000 で、フレームは DT = 0 に来る。FT4 は 3600
+（300 ms。0.16.1 から、#749。0.16.0 では 5424）。FT4 の波形は前後にランプシンボルを 1 つずつ持つ
+（`gen_ft4wave`）のでトーンはバッファの 576 サンプル目、0.348 s から始まり、遅延のない経路なら DT -0.152 s で
+デコードされる（この crate のデコーダで測定。`ft4_decode.f90:477` も同じ 0.5 s 基準なので WSJT-X の受信側も
+同じ値になるはずだが、`jt9` では試していない）。`tx_start_offset_s` は DT = 0 の基準であって置き場所ではない。この
+フィールドは 0.16.0 で末尾に足された。このヘッダでビルドして古いライブラリで動かすホストは `size` を確かめる。
 
 7つの `mfsk_encode_*` ヘルパは、よくある
 `call1 / call2 / report` メッセージ用のワンコール近道である:
@@ -1004,7 +1013,7 @@ JTTY、Q65 リスト、ランタイム）はそのまま使える。
 | `mfsk_session_set_on_decode` / `_set_budget` / `_last_budget` / `_add_callsign` / `_copy_info` / `_last_error` | 名前はそのまま、接頭辞が `mfsk_decoder_` |
 | `mfsk_session_keep_known` / `_known_count` / `_keep_fft_cache` | 廃止。デコーダは上流が持つ状態を持つ。結果を持ち越す代わりに FT8 の a7（`MfskExtras::a7`、`period` つき） |
 | `mfsk_stream_set_epoch(s, double utc_s)`、`_buffered`、`_take_slot_i16(…, double *utc)` | `mfsk_stream_set_time(s, utc_ns, at_sample, &change)` と `mfsk_stream_position`、`_dropped`、`_take_slot_i16(…, int64_t *period, int64_t *utc_ns)`。ストリームはエポックを受け取る代わりに読み取りに追従する（400 ppm） |
-| `mfsk_wspr_decode`、`mfsk_jt9_decode_at`、`mfsk_jt65_decode_at` | `mfsk_decoder_open(MFSK_MODE_WSPR / _JT9 / _JT65, …)` と `mfsk_decoder_decode_*`。帯域は `band_lo_hz` / `band_hi_hz`、フレーム窓は `t_early_s` / `t_late_s` |
+| `mfsk_wspr_decode`、`mfsk_jt9_decode_at`、`mfsk_jt65_decode_at` | `mfsk_decoder_open(MFSK_MODE_WSPR / _JT9 / _JT65, …)` と `mfsk_decoder_decode_*`。帯域は `band_lo_hz` / `band_hi_hz`、フレーム窓（WSPR、JT65）は `t_early_s` / `t_late_s` |
 | `mfsk_q65_decode`、`_with_ap`、`_fading`、`_with_ap_list`、`_decode_ex`、`mfsk_q65_params_init`、`MfskQ65Params` | Q65 デコーダ1本: `pileup`、`max_drift`、`fading_*`、AP ヒントは `MfskExtras`。`eme_delay` と平均は `MfskParams::flags`。AP リストは QSO 文脈から。コンテストの呼び出し局は `mfsk_decoder_set_q65_callers` |
 | `mfsk_callsign_hash_table_*`、`MfskCallsignHashTable*` 引数 | 廃止。デコーダがそれぞれ自分のテーブルを持ち、`mfsk_decoder_add_callsign` で種を入れる |
 | `mfsk_mode_defaults`、`MfskDecodeDefaults` | 廃止。`mfsk_params_init` が既定値を書く |

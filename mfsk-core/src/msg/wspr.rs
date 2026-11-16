@@ -309,8 +309,9 @@ fn c_str(b: &[u8]) -> &str {
 /// * `60000 ≤ nprefix ≤ 60035` → single-char digit/letter suffix
 /// * `60036 ≤ nprefix ≤ 60125` → two-digit suffix
 ///
-/// `nc = nprefix - 60000` is stored in a `char` (`:265`), so a field past 60255 wraps
-/// modulo 256 as it does there; what lands outside `0..=125` is refused (`:283`).
+/// `nc = nprefix - 60000` is an `int` (`:265`, since v3.3.0-beta6 `ffa884606`; a `char` before,
+/// which wrapped a field past 60255 into a valid suffix), and what lies outside `0..=125` is
+/// refused (`:283`).
 fn apply_prefix(nprefix: u32, base_call: &str) -> Option<String> {
     let call = if nprefix < 60_000 {
         let mut n = nprefix;
@@ -326,7 +327,7 @@ fn apply_prefix(nprefix: u32, base_call: &str) -> Option<String> {
             base_call
         )
     } else {
-        let nc = (nprefix - 60_000) as u8 as i8;
+        let nc = nprefix - 60_000;
         match nc {
             0..=9 => format!("{}/{}", base_call, (b'0' + nc as u8) as char),
             10..=35 => format!("{}/{}", base_call, (b'A' + (nc - 10) as u8) as char),
@@ -347,11 +348,10 @@ fn apply_prefix(nprefix: u32, base_call: &str) -> Option<String> {
 /// (`wsprd_utils.c:324-405`). `None` is what `unpk_` answers with a non-zero return
 /// (`noprint`): the decode is neither printed nor written to `ALL_WSPR.TXT`.
 ///
-/// Deliberate divergence: `unpk_` returns 0 with an **empty** message for `ntype == 63` (a
-/// 22-bit field whose low seven bits are 127, matching none of its `if`s), so `wsprd` prints a
-/// decode with no text. That is an upstream gap, not a message; this returns `None`.
+/// `ntype == 63` (a 22-bit field whose low seven bits are 127) is reserved: `unpk_` returns 1
+/// for it since v3.3.0-beta6 (`ffa884606`; before, 0 with an empty message), and so does this.
 ///
-/// Measured against `unpk_` itself on `tests/fixtures/wsprd_unpack_rc1.tsv` by
+/// Measured against `unpk_` itself on `tests/fixtures/wsprd_unpack_beta6.tsv` by
 /// `tests/wsprd_unpack.rs`.
 pub fn unpack(bits: &[u8; 50]) -> Option<WsprMessage> {
     // Pack bit vector back into the 7-byte word format unpack50 expects.
@@ -439,6 +439,66 @@ pub fn unpack(bits: &[u8; 50]) -> Option<WsprMessage> {
     }
 
     None
+}
+
+/// What `wsprd`'s OSD acceptance block makes of an OSD codeword before it consults the hash
+/// table (`wsprd.c:1437-1469`), which unpacks it its own way and not through `unpk_`.
+#[cfg(all(feature = "wspr", any(feature = "fft-rustfft", feature = "fft-extern")))]
+pub(crate) enum OsdProbe {
+    /// `unpackcall`, `unpackgrid` or `unpackpfx` failed: the C `break`s out of the DT
+    /// peak-up loop for this block size.
+    Break,
+    /// Not a Type 1 / Type 2 message (`ntype` outside `0..=62`): neither accepted nor a
+    /// reason to stop.
+    Skip,
+    /// What the table is asked about: a Type 1 call and grid, or a Type 2 call with its
+    /// prefix or suffix. The power is carried but not looked at.
+    Candidate(WsprMessage),
+}
+
+/// The C's unpacking in the OSD acceptance block, see [`OsdProbe`].
+#[cfg(all(feature = "wspr", any(feature = "fft-rustfft", feature = "fft-extern")))]
+pub(crate) fn osd_probe(bits: &[u8; 50]) -> OsdProbe {
+    let mut data = [0u8; 7];
+    for i in 0..50 {
+        if bits[i] & 1 != 0 {
+            data[i / 8] |= 1 << (7 - (i % 8));
+        }
+    }
+    let (n1, n2) = unpack50(&data);
+    let Some(call_buf) = unpackcall_wsprd(n1) else {
+        return OsdProbe::Break;
+    };
+    let Some((grid, ntype)) = unpack_grid(n2) else {
+        return OsdProbe::Break;
+    };
+    if !(0..=62).contains(&ntype) {
+        return OsdProbe::Skip;
+    }
+    let callsign = c_str(&call_buf);
+    let nu = ntype % 10;
+    if nu == 0 || nu == 3 || nu == 7 {
+        return OsdProbe::Candidate(WsprMessage::Type1 {
+            callsign: callsign.into(),
+            grid,
+            power_dbm: ntype,
+        });
+    }
+    let nadd = if nu > 7 {
+        nu - 7
+    } else if nu > 3 {
+        nu - 3
+    } else {
+        nu
+    };
+    let n3 = (n2 >> 7) + 32_768 * (nadd as u32 - 1);
+    match apply_prefix(n3, callsign) {
+        Some(full_call) => OsdProbe::Candidate(WsprMessage::Type2 {
+            callsign: full_call,
+            power_dbm: ntype - nadd,
+        }),
+        None => OsdProbe::Break,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -84,7 +84,15 @@ fn the_pipeline_round_trips() {
     for (mode, slot_s) in [(MfskMode::Ft8, 15.0f32), (MfskMode::Ft4, 7.5)] {
         let frame = synth_i16(mode, &msg, 1500.0);
         let mut slot = vec![0i16; (slot_s * FS as f32) as usize];
-        let start = (0.5 * FS as f32) as usize;
+        // where the mode info says the buffer goes: WSJT-X's `delay_ms` (FT4 300 ms, #749)
+        let mut info = std::mem::MaybeUninit::<MfskModeInfo>::zeroed();
+        unsafe { (*info.as_mut_ptr()).size = std::mem::size_of::<MfskModeInfo>() as u32 };
+        assert_eq!(
+            unsafe { mfsk_mode_info(mode as u32, info.as_mut_ptr()) },
+            MfskStatus::Ok
+        );
+        let start = unsafe { info.assume_init() }.tx_buffer_start_samples_12k as usize;
+        assert_eq!(start, if mode == MfskMode::Ft4 { 3600 } else { 6000 });
         for (i, s) in frame.iter().enumerate() {
             if let Some(d) = slot.get_mut(start + i) {
                 *d = d.saturating_add(*s);

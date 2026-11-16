@@ -79,7 +79,16 @@ final class MessageTests: XCTestCase {
         for (mode, length) in lengths {
             XCTAssertGreaterThan(length, 0, "\(mode.name)")
             let info = try mode.info
-            XCTAssertEqual(length, Int(info.totalSymbols * info.samplesPerSymbol), "\(mode.name)")
+            // Tone symbols plus, for FT4, a ramp symbol each side (`gen_ft4wave`). The buffer starts
+            // at the DT = 0 position less that lead, except FT4, which WSJT-X starts at 300 ms.
+            let tones = Int(info.totalSymbols * info.samplesPerSymbol)
+            let lead = (length - tones) / 2
+            XCTAssertEqual(length, tones + 2 * lead, "\(mode.name)")
+            XCTAssertEqual(lead, mode == .ft4 ? 576 : 0, "\(mode.name)")
+            XCTAssertEqual(Int(info.txBufferStartSamples12k),
+                           mode == .ft4 ? 3_600
+                               : Int((info.txStartOffsetSeconds * 12_000).rounded()) - lead,
+                           "\(mode.name)")
         }
     }
 }

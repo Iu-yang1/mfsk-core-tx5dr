@@ -13,23 +13,13 @@ use crate::msg::Jt72Codec;
 use super::Jt9Result;
 use super::softsym::{AudioFft, FSAMPLE_DOWN, afc9, llrs_from_c5, peakdt9, twkfreq_poly};
 
-/// Sync-score gate: peakdt9 returns `(sync_avg/data_avg)−1`. For pure
-/// noise this is ≈ 0; clean JT9 frames sit in the 0.3–10 range. WSJT-X
-/// uses ccfbest > 30 (raw integrated power) on its own scale; the 1.5
-/// threshold here is calibrated from the 130418_1742 sample (golden
-/// signals score 1.5..15, phantoms < 0.8).
-const SYNC_GATE: f32 = 1.5;
-
-/// JT9 Fano-decode depth — mirrors WSJT-X `jt9_decode.f90`'s `ndepth`
-/// cycle-per-bit budget tiers (the `-d`/`--depth` CLI flag, plus
-/// "Decode Again" which uses the deepest tier unconditionally). Only
-/// the cycle *budget* is ported here, not WSJT-X's own `ccflim`/
-/// `schklim` gate-loosening at deeper tiers — this crate's own
-/// sync-score/`sync`/`schk` thresholds were calibrated separately
-/// against this crate's own candidate pipeline and are unchanged by
-/// depth (see `docs/notes/BENCHMARKS.md`'s JT9 section for the
-/// measured tradeoff and the real-`jt9`-at-`-d1` comparison this
-/// default was checked against).
+/// JT9 decode depth — WSJT-X `jt9_decode.f90`'s `ndepth` (the `-d`/`--depth` CLI flag, plus
+/// "Decode Again" for [`Self::Max`]): the Fano cycle-per-bit `limit` and, in the scan, the `ccflim`
+/// gate on `sync9`'s `ccfred` (3.0 / 2.7 / 2.5 / 2.4, `jt9_decode.f90:205-223`; the Rx-window pass is
+/// always `Deep`'s). Until #726 only the limit was ported and the gates were this crate's own,
+/// unchanged by depth; the variant notes below on `Fast` vs `Normal` describe that scan. With
+/// `jt9`'s gates, `Fast` decodes what `jt9 -d 1` does, and on the JT9 AWGN sweep reads -26.30 dB
+/// against `Deep`'s -26.58 (`tests/jt9_sweep.rs`).
 ///
 /// Every non-`Fast` tier costs more only on candidates that
 /// ultimately fail to converge — a real signal converges in
@@ -39,31 +29,14 @@ const SYNC_GATE: f32 = 1.5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum Jt9Depth {
-    /// `limit=5000` — WSJT-X's own automatic per-slot scan default
-    /// (`jt9 -d1`, `jt9_decode.f90:84`). **The crate default** as of
-    /// task #24's fix — see that variant's own doc comment for why
-    /// `Fast` and `Normal` turned out to perform identically once the
-    /// real bug was found and fixed.
+    /// `jt9 -d 1`: Fano `limit` 5000, `ccflim` 3.0. The crate default (`DecodeRequest`);
+    /// `Decoder` takes its depth from `DecodeParams`, whose default is `Deep`. On
+    /// `130418_1742.wav` it decodes what `jt9 -d 1` does, one message fewer than `Deep`; on the
+    /// AWGN sweep -26.30 dB against `Deep`'s -26.58 (#742). Before #742 the scan had no
+    /// `ccflim` and `Fast` scored like `Normal` (`docs/notes/BENCHMARKS.md`, JT9).
     #[default]
     Fast,
-    /// `limit=10000` — this crate's original hardcoded default before
-    /// depth became configurable (2026-08-08). Initially *kept* as the
-    /// crate default over `Fast` after finding `Normal` closer (but
-    /// not equal) to real `jt9 -9 -d1`'s sensitivity — but that
-    /// comparison's real cause turned out to be unrelated to cycle
-    /// budget at all (task #24): `jt9::search::coarse_search`'s
-    /// frequency grid (one bin = one tone spacing, ≈1.736 Hz) had no
-    /// sub-bin refinement, so candidates routinely landed 0.3-1 Hz
-    /// off the true frequency — inside Fano's sharp non-convergence
-    /// zone regardless of cycle budget. Fixed via
-    /// `search::refine_freq_hz` (3-point parabolic interpolation,
-    /// same technique as JT65's own scalloping-loss fix, issue #169).
-    /// Post-fix, `Fast` and `Normal` score identically on the AWGN
-    /// sweep (both now *exceed* real `jt9 -d1`'s own −26/−27 dB
-    /// numbers) — so `Normal`'s extra cycle budget buys nothing
-    /// measurable anymore; `Fast` moved to being the default since
-    /// it's strictly cheaper for the same result. See
-    /// `docs/notes/BENCHMARKS.md` for the before/after numbers.
+    /// `jt9 -d 2`: `limit` 10000, `ccflim` 2.7.
     Normal,
     /// `limit=30000` — WSJT-X `-d3`.
     Deep,
@@ -87,10 +60,8 @@ impl Jt9Depth {
 /// audio FFT. Returns `None` when the sync gate is missed, Fano fails
 /// to converge, or the message is the all-zero codeword.
 ///
-/// The scan's production candidate loop (`super::decode_scan_inner`) calls
-/// [`decode_at_baseband_with_fft_depth`] directly (it always has an
-/// explicit [`Jt9Depth`] to hand); this default-depth convenience is
-/// currently only exercised by tests (`decode_at_baseband` below).
+/// The scan (`super::decode_scan_inner`) calls [`decode_at_baseband_gated`] with the pass's
+/// gates; this default-depth convenience is only exercised by tests (`decode_at_baseband` below).
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn decode_at_baseband_with_fft(big_fft: &AudioFft, freq_hz: f32) -> Option<Jt9Result> {
     decode_at_baseband_with_fft_depth(big_fft, freq_hz, Jt9Depth::default())
@@ -141,10 +112,11 @@ pub fn decode_at_baseband_gated(
     }
 
     let c2 = big_fft.downsam9(freq_hz);
-    let (lagpk, sync_score, mut c3) = peakdt9(&c2);
-    if !sync_score.is_finite() || sync_score < SYNC_GATE {
-        return None;
-    }
+    // No gate on `peakdt9`'s score: `jt9` has none (`softsym.f90`). Until #726 this crate gated it at
+    // 1.5 (calibrated on `130418_1742.wav`, phantoms < 0.8) because its own coarse scan offered
+    // candidates `sync9`'s `ccfred`/`red2` gates would not; with those gates in front
+    // (`jt9::sync9`) the 1.5 gate changed no decode on that file at any depth.
+    let (lagpk, _sync_score, mut c3) = peakdt9(&c2);
 
     // WSJT-X-faithful AFC: 3-parameter chi-square optimisation over
     // (frequency, drift, integer-sample time shift). `afc9` mutates

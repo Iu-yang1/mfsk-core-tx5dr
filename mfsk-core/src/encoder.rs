@@ -302,6 +302,15 @@ impl Encoded {
     pub fn synth_len(&self, sample_rate: u32) -> usize {
         synth_len(self.mode, sample_rate)
     }
+
+    /// Where to put the audio: its first sample goes this many samples (at `sample_rate`) after
+    /// the start of the slot, where WSJT-X's own transmitter starts it (`Modulator.cpp` `delay_ms`).
+    /// For every mode but FT4 the frame then lands at DT = 0 on a WSJT-X receiver; FT4 starts at
+    /// 300 ms, ~150 ms earlier, as WSJT-X does (#749).
+    /// [`engine::tx::tx_buffer_start`](crate::engine::tx::tx_buffer_start) has the detail.
+    pub fn tx_buffer_start(&self, sample_rate: u32) -> usize {
+        tx_buffer_start(self.mode, sample_rate)
+    }
 }
 
 // ── routes ──────────────────────────────────────────────────────────────
@@ -503,6 +512,13 @@ macro_rules! encoder_modes {
             let _ = fs;
             match mode {
                 $( #[cfg(feature = $feat)] Mode::$var => crate::engine::tx::synth_len::<$ty>(fs), )*
+            }
+        }
+
+        fn tx_buffer_start(mode: Mode, fs: u32) -> usize {
+            let _ = fs;
+            match mode {
+                $( #[cfg(feature = $feat)] Mode::$var => crate::engine::tx::tx_buffer_start::<$ty>(fs), )*
             }
         }
     };

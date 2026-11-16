@@ -2,7 +2,7 @@
 name        = "skimmer-core"
 # The skimmer's own version, not the library's: it is released on its own
 # `skimmer-v*` tags (`skimmer-release.yml`), and this is what PSK Reporter sees.
-version = "1.0.2"
+version = "1.1.0"
 rust-version.workspace = true
 edition     = "2024"
 license     = "GPL-3.0-only"
@@ -22,6 +22,8 @@ mfsk-core = { path = "../../../mfsk-core", default-features = false, features = 
     "std", "parallel", "fft-rustfft",
     "ft8", "ft4", "fst4", "wspr", "jt9", "jt65", "q65", "jtty",
 ] }
+# The IQ clients (SpyServer, rtl_tcp), the clock and the stream anchor, std only.
+sdr-io = { path = "../../sdr-io" }
 
 [dev-dependencies]
 serde_json = "1"

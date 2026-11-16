@@ -161,14 +161,13 @@ extension Mode {
         return Array(out.prefix(Int(written)))
     }
 
-    /// All three stages: a message, placed in a full slot at this mode's
-    /// own TX offset, ready to hand to ``Decoder`` or to a sound
-    /// card.
+    /// All three stages: a message, placed in a full slot where WSJT-X's
+    /// transmitter would start it, ready to hand to ``Decoder`` or to a
+    /// sound card.
     ///
-    /// The offset is ``ModeInfo/txStartOffsetSeconds`` — 0.5 s for FT8,
-    /// FT4 and FST4-15, 1.0 s for the other FST4 sub-modes — and getting
-    /// it from the mode rather than a constant is the whole reason the
-    /// field is published.
+    /// The frame starts at ``ModeInfo/txBufferStartSamples12k`` — 6000 for
+    /// FT8, 3600 for FT4 (300 ms, as WSJT-X; it decodes at DT -0.152 s),
+    /// 12 000 for the 1 s modes — asked of the mode rather than baked in.
     public func synthesiseSlot(
         _ message: Message,
         frequencyHz: Float,
@@ -179,7 +178,7 @@ extension Mode {
                                         frequencyHz: frequencyHz,
                                         amplitude: amplitude)
         var slot = [Int16](repeating: 0, count: Int(info.slotSamples12k))
-        let start = Int(info.txStartOffsetSeconds * 12_000)
+        let start = Int(info.txBufferStartSamples12k)
         for (i, sample) in frame.enumerated() where start + i < slot.count {
             slot[start + i] = sample
         }
