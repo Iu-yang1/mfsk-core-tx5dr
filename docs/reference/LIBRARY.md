@@ -59,7 +59,7 @@ This document is the Rust host API. Other audiences:
 
 ```toml
 [dependencies]
-mfsk-core = { version = "0.15", features = ["ft8", "ft4", "wspr"] }
+mfsk-core = { version = "0.16", features = ["ft8", "ft4", "wspr"] }
 ```
 
 Pull in only the protocol features you need; the examples below enable
@@ -77,7 +77,7 @@ let tx = encode(Mode::Ft8, "CQ JA1ABC PM95").unwrap();
 let frame = tx.synthesize_i16(&TxAudio::new(12_000, /* freq */ 1500.0), /* amp */ 20_000);
 
 let mut audio = vec![0i16; 180_000]; // 15 s @ 12 kHz
-let start = (0.5 * 12_000.0) as usize;
+let start = tx.tx_buffer_start(12_000); // where this mode's buffer goes: 6000 for FT8
 for (i, &s) in frame.iter().enumerate() {
     if start + i < audio.len() { audio[start + i] = s; }
 }
@@ -436,7 +436,7 @@ the design is `docs/notes/API_0_14_DESIGN.md`.
 | `unpack77`: telemetry (type 0.5) | printed without leading zeros | all 18 hex digits (`3z6.6`, `packjt77.f90:1640`) | — |
 | `unpack77`: a 28-bit field from 532444 up (an out-of-range `CQ` token) | `<?>` | `<...>` (hash22, `packjt77.f90:283`) | — |
 | JT9 / JT65: free text and compound calls | `Jt72Message::Unsupported`: the row was dropped (JT9) or printed as `<unsupported …>` (JT65) | printed as `jt9` prints it (`Jt72Message::Compound`, `FreeText`, `packjt.f90:537-741`); the filters are upstream's: `000AAA` for JT9 (`jt9fano.f90:87-88`), `000AAA` and the `0L6MWK` birdie for JT65 (`decode65b.f90:27-28`) | rc1's own `packmsg` / `unpackmsg`, 7 651 rows; the JT65 (4/5) and JT9 (7/7) goldens are identical with extra 0: their references contain no such message |
-| WSPR text | a Type 3 call printed as its hash, `<#hhhhh>`; `unpackcall` / `unpackpfx` approximated, so some calls were dropped | as `wsprd` prints it (`wsprd_utils.c:324-405`, `unpk_`): `<...>` for a Type 3 call not heard, `<CALL>` once the decoder has heard it (`WsprResult::hashed_call`); `PFX/CALL` as `wsprd` writes it; `unpackcall` exact, so some calls that were dropped now decode | rc1's own `unpk_`, 26 046 rows; the WSPR golden is 9/9, extra 0, texts and freq / dt / snr identical. One divergence: `ntype == 63` is `None` (`unpk_` prints an empty message) |
+| WSPR text | a Type 3 call printed as its hash, `<#hhhhh>`; `unpackcall` / `unpackpfx` approximated, so some calls were dropped | as `wsprd` prints it (`wsprd_utils.c:324-405`, `unpk_`): `<...>` for a Type 3 call not heard, `<CALL>` once the decoder has heard it (`WsprResult::hashed_call`); `PFX/CALL` as `wsprd` writes it; `unpackcall` exact, so some calls that were dropped now decode | rc1's own `unpk_`, 26 046 rows; the WSPR golden is 9/9, extra 0, texts and freq / dt / snr identical. One divergence: `ntype == 63` is `None` (`unpk_` prints an empty message); since 0.16 the fixture is beta6's `unpk_`, which refuses it too (#727) |
 | FT8 symbol scaling and `nsync` gate | `* (1/1000)`; `nsync` recounted on the coarse spectrogram | `/ 1e3` and the refined spectra, as `ft8b.f90` | no group moved; the gate flips for one candidate in the tier-A/B suite ([#423](https://github.com/jl1nie/mfsk-core/issues/423)) |
 
 **Code.**
@@ -828,7 +828,7 @@ the set). FST4, FST4W and Q65 mean every sub-mode.
 4. The FT family's QSO-context AP (`frame.rs`, `qso_hint`): not read when the mode's `Extras::ap_hint` is set, which replaces it; FT4 and FST4 run no AP at `Depth::Fast`, and FT4 none for a Fox / Hound contest setting.
 5. JT65: only with `deep_search` (the hint bank).
 6. JT65 reads no AP setting: WSJT-X's AP passes (`extract.f90`) are not ported (`jt65/chase.rs`, #703).
-7. WSPR searches the whole of wsprd's baseband (1500 ± 187.5 Hz). `wsprd` takes no band either: its `fmin` / `fmax` are fixed at ±110 Hz (`wsprd.c:781`), a narrowing this port does not apply (`wspr/decode.rs`, #697). `default_params` still sets a band for WSPR, which it ignores.
+7. WSPR searches the whole of wsprd's baseband (1500 ± 187.5 Hz). `wsprd` takes no band either: its `fmin` / `fmax` are fixed at ±110 Hz (`wsprd.c:781`), a narrowing this port applies only when `WsprExtras::freq_span_hz` is set (`wspr/decode.rs`, #697). `default_params` still sets a band for WSPR, which it ignores.
 8. Q65: `rx_freq_hz` / `tol_hz` place the AP-list and averaged q3 decodes (`q65_decode.f90:263-272`), the plain decode searching `band_hz`; `station.call`, the QSO calls, `ap` and `contest` build the AP list only with `ap` not Off, a station call, and `rx_freq_hz` set or `Contest::GridExchange` (the only contest that changes anything).
 9. FT8 also reads `contest` for its message filter (`/R`, `TU; `, §2.6), with or without `ap_hint`.
 10. **Differs from WSJT-X** (#704): upstream reads FST4 / FST4W `emedelay` (`fst4_decode.f90:889-892`), Q65 `nQSOprogress` and `lapcqonly` (`q65_decode.f90:212,235,242`; here `CqOnly` acts as `Full`), and bounds FST4's noise-blanker sweep with `ntol` (`fst4_decode.f90:318-319`; here `Fst4Extras::noise_blanker`'s `Sweep { ftol_hz }`); the port reads none of them. FST4's `contest` is the other way round: the port applies the contest's CQ token and the Fox rule, upstream's FST4 takes no `ncontest`.
@@ -853,7 +853,7 @@ tree):
 | FT4 | sync 1.18, 200 candidates, 1 pass, no OSD, no AP | 3 passes, no OSD | 3 passes, OSD | `ft4_decode.f90:31,192-203,323-324` |
 | FST4 | minsync 1.20 (FST4-15: 1.15), 200 candidates, OSD, no `i0 ± 1` timing retry, no AP | + the retry (`jittermax`) | same | `fst4_decode.f90:53,234-248,308-309,421-423` |
 | WSPR | `wsprd -qB`: 2 passes, no jitter | `-C 500 -o 4`: 3 passes, OSD | `+ -d`: more candidates | `wsprd.c:819-900`; GUI `mainwindow.cpp:2824-2826` |
-| JT9 | Fano limit 5000 | 10000 | 30000 | `jt9_decode.f90:83-100` |
+| JT9 | Fano limit 5000, `ccflim` 3.0 | 10000, 2.7 | 30000, 2.5 (the Rx-window pass always this) | `jt9_decode.f90:205-223` |
 | JT65 | 2 passes, `nvec` 100 | 2 passes, 1000 | 4 passes, 1000 | `jt65_decode.f90:110-119` |
 | Q65 | `maxiters` 40, `(idf, idt, maxdist)` (1, 1, 4) | 60, (3, 3, 5) | 100, (5, 5, 5) | `q65_decode.f90:183-188`, `q65_loops.f90:27-40` |
 
@@ -1167,7 +1167,7 @@ let msg77 = pack77("CQ", "JA1ABC", "PM95").unwrap();
 let tones = message_to_tones::<Ft8>(&msg77);
 let frame = synthesize_i16::<Ft8>(&tones, 12_000, /* freq */ 1000.0, /* amp */ 20_000);
 let mut audio = vec![0i16; 180_000]; // 15 s @ 12 kHz
-let start = (0.5 * 12_000.0) as usize;
+let start = mfsk_core::engine::tx::tx_buffer_start::<Ft8>(12_000); // 6000
 audio[start..start + frame.len()].copy_from_slice(&frame);
 
 let mut decoder = Decoder::<Ft8>::new(DecodeParams::for_band((200.0, 3_000.0)).rx_freq(1000.0));
@@ -1190,11 +1190,40 @@ The strategy extensions are where phantom decodes come from ([§2.2](#22-decodep
 carry `search: SearchTuning` (`time_tolerance_early_sec`,
 `time_tolerance_late_sec`, `score_threshold`, `max_candidates`, each
 `Option`, over the mode's `default_search_params()` with the block's band).
+JT9 reads none of the four: its scan is `jt9`'s (`sync9` and the bin loop of
+`jt9_decode.f90`), whose lag range and `ccflim` gates are fixed upstream (#726).
 WSPR adds `max_cycles_per_bit` over the depth's (10000 is `wsprd`'s own
 default, which the GUI's Normal and Deep lower to 500; measured: on the
 WSJT-X golden 500 loses G8VDQ at −23 dB, which 10000 decodes); JT65 adds
 `chase: Option<ChaseParams>` (by default the Chase decoder's trial count is
 the depth's `nvec`).
+
+*`wsprd` compatibility (WSPR).* The rest of `WsprExtras` mirrors `wsprd`'s options, each an `Option` that, when `Some`,
+replaces that one setting of the depth's mapping (`-qB` / `-C 500 -o 4` / `+ -d`) and leaves the others: `passes`
+(`npasses`, `wsprd.c:825`; `-B` 2, `-s` 1), `subtraction` (`-s` off), `jitter` (`-q` off), `more_candidates` (`-d`),
+`osd: Option<WsprOsd>` (`-o n`, `wsprd.c:826,1422`: `WsprOsd::Off` none, `Wsprd(0..=5)` `osdwspr` at that depth on every rung
+of every pass, accepting only what the callsign table holds, `wsprd.c:1462-1468`, a depth above 5 is 5; `Crate`, the
+default, is the depth's own order-2 OSD on the final pass, which matches none of `wsprd -o 0..5`), `freq_span_hz` (`fmin` /
+`fmax`, `wsprd.c:781`, `-w` is ±150; it also selects candidates in `wsprd`'s order, so `search.max_candidates` then means the
+first N spectral peaks in frequency order, then the window, not the strongest N), `dial_error_hz` (`-e`; shifts the window once
+per pass the loop runs, as `wsprd.c:1172-1176` does; it implies `wsprd`'s ±110 Hz window when `freq_span_hz` is unset),
+`fano_bias` (`-z`, default 0.45), `replica_from_text` and `wsprd_gates`. `replica_from_text` reproduces how `wsprd` subtracts
+(`wsprd.c:1497-1503`): it rebuilds the signal from the *printed text*, so a Type 3 whose call is not in the table
+(`<...>`) is subtracted as the codeword of `nhash("...")`, the wrong one, its `nhardmin` is counted against that, a text the
+rebuild refuses ends the pass's candidate loop, and a hashed call of 11 or 12 characters (it does not fit `unpk_`'s 13-byte
+buffer) is not printed; off, the decoded codeword is subtracted, which is right and a deliberate divergence. `wsprd_gates` is
+`wsprd`'s RMS gate on the quantised soft symbols (`wsprd.c:1400-1408`) and its duplicate rule (same call text within 4 Hz,
+at most 50 decodes, `wsprd.c:1506-1516`) in place of the crate's. `WsprExtras::wsprd()` sets every field to bare `wsprd`'s
+default, so the depth no longer matters; `with_*` builders change one. Each `WsprResult` also carries what `wsprd` prints and
+keeps: `sync`, `pass`, `blocksize`, `jitter`, `decode_type`, `nhardmin`, `cycles`, `metric`, and `f1_hz` (the four-tone centre as an offset from
+1500 Hz, `wsprd`'s `f1`). `Decoder::state()` / `state_mut()` (generic over the mode, the least invasive accessor) reach the
+`WsprState`, whose `table_mut()` is the `WsprCallsignTable`: `from_hashtable_txt` / `to_hashtable_txt` read and write
+`wsprd`'s `hashtable.txt` (`wsprd.c:1051-1060,1637-1645`) and `iter()` lists it; `wsprd -H` is a caller that does neither.
+`wspr::wsprd_fmt` (`std`) formats the stdout line, the `ALL_WSPR.TXT` line and the `wspr_spots.txt` line byte for byte
+(`wsprd.c:1577-1594`) from a `WsprResult`, the file's date and time and the dial in MHz (`dialfreq - e * 1e-6` with `-e`);
+`in_wsprd_order` sorts as `wsprd` does. Measured against v3.3.0-beta6, byte-equal: the golden under every option set and
+`-o 0..5` with a preloaded table, and synthetic recordings for the Type 3 replica, the 13-byte limit and `-B -e`
+(`tests/wsprd_beta6_parity.rs`, `docs/notes/WSPRD_PARITY.md`).
 
 **WSPR** decimates the slot to wsprd's 375 Hz baseband and runs
 wsprd's own coarse search and three decode passes there, rather than
@@ -1399,7 +1428,7 @@ assert!(decoder.params().averaging);
 
 **`dt_sec`, `SearchParams` and `SyncCandidate`.** For WSPR, JT9, JT65 and
 Q65 the result's `dt_sec` runs from the **nominal start** — the mode's
-`tx_start_offset_s` (WSPR: its fixed 1.0 s `TX_START_OFFSET_S`) — and is
+`tx_start_offset_s` (1.0 s for all four but Q65-15/30, where WSJT-X starts their audio) — and is
 signed, so a frame that begins early reads negative (#397; it was measured
 from the buffer start for Q65 and JT65, and a 0.5 s early frame read −0.013 s
 and +0.442 s). `to_decoded` on `Q65Result` / `Jt65Result` / `Jt9Result` reads
@@ -1412,7 +1441,8 @@ Q65's is asymmetric; `SearchParams::symmetric(..)` sets both) and
 and `.dt_sec(nominal, rate)` converts. There is no `SearchParams::default()`:
 the defaults are mode-specific data, so each mode has
 `search::default_search_params()` (Q65: 200-3000 Hz, ±1.0 s, 8 candidates,
-threshold 0.1) — that is what `SearchTuning` overrides. FT8, FT4 and FST4 keep
+threshold 0.1) — that is what `SearchTuning` overrides. JT9 takes only the band from it: its scan is
+`jt9`'s `sync9` stage, with no time window or score threshold of its own (#726). FT8, FT4 and FST4 keep
 `engine::sync::SyncCandidate`, which carries `dt_sec` instead of `start_sample`,
 on purpose.
 
@@ -2170,7 +2200,7 @@ slot model with a burst scan, and JTTY with an incremental receiver.
 | **FT4**  | `Fast` single pass, no OSD, no AP; `Normal` `SicRounds(3)`; `Deep` `SicRounds(3)` with OSD | `Tuning::strategy` (`SinglePass`, `SicRounds(n)`); full-slot coherent sync (`sync2d`) |
 | **FST4** | single-pass BP + OSD at every depth; the `i0 ± 1` timing retry from `Normal` | full-slot two-stage coherent sync search; `noise_blanker` (fixed % or sweep) |
 | **WSPR** | wsprd's `-qB` / `-C 500 -o 4` / `+ -d` passes over the quarter-symbol spectrogram scan | `max_cycles_per_bit` |
-| **JT9**  | single bespoke pass, Fano limit by depth; the Rx-frequency pass at `rx_freq_hz` | — |
+| **JT9**  | `jt9`'s candidate stage: `sync9`'s 0.732 Hz bins walked upwards, `ccflim` and the Fano limit by depth; the Rx-frequency pass first at `rx_freq_hz` | — |
 | **JT65** | 2 / 2 / 4 passes with subtraction; stochastic Chase decoder with the depth's `nvec` trials | `chase` (RS erasure decode is `jt65::SniperRequest::erasures`) |
 | **Q65**  | `(Δf,Δt,b90)` grid + Lorentzian fading BP (scan), grid effort by depth | AP-hint, explicit fast-fading, AP-list, averaging; **q3** list decode; Max Drift; Pileup; EME delay ([§2.5](#25-extras-and-the-protocols-outside-decoder)) |
 | **MSK144** | burst scan over the whole T/R period | — |
@@ -2616,14 +2646,17 @@ const WSPR_SYNC_VECTOR: [u8; 162] = [0u8; 162];
 
 A protocol that transmits FSK also implements
 `engine::tx::FskWaveform`, one constant saying which of WSJT-X's two
-transmit families it belongs to (#391):
+transmit families it belongs to, and which of the GFSK shapes (#391):
 
 ```rust,ignore
 impl FskWaveform for Wspr {
     const WAVEFORM: Waveform = Waveform::Cpfsk;          // WSPR, JT9, JT65, Q65
 }
 impl FskWaveform for Ft8 {
-    const WAVEFORM: Waveform = Waveform::Gfsk(FT8_GFSK); // FT8, FT4, FST4
+    const WAVEFORM: Waveform = Waveform::Gfsk(FT8_GFSK); // FT8, FST4 (`Waveform::Fst4` since #726)
+}
+impl FskWaveform for Ft4 {
+    const WAVEFORM: Waveform = Waveform::Ft4(FT4_GFSK);  // a ramp symbol each side
 }
 ```
 
@@ -2637,6 +2670,26 @@ of `gen_ft8wave.f90` and friends. A test checks each `Gfsk` config
 against its protocol's own `NSPS`, `GFSK_BT` and `GFSK_HMOD`, so the two
 cannot drift apart. A protocol whose transmit chain is not FSK — the
 `uvpacket` example is π/4-DQPSK — just doesn't implement it.
+
+The audio is `N_SYMBOLS` symbols plus, for `Waveform::Ft4`, a ramp symbol each side (`synth_len`).
+Only FT4 has a nonzero `N_RAMP`: `gen_ft4wave.f90` frames its 103 tone symbols with a ramp symbol
+on each side (105 symbols, 60 480 samples at 12 kHz), and the raised-cosine ramp
+is a whole symbol long. The tones therefore start `synth_lead_samples::<P>(rate)` (576 for FT4,
+0 elsewhere) into the buffer. **Place the buffer at `tx_buffer_start::<P>(rate)`**
+(`Encoded::tx_buffer_start`, `ModeMeta::tx_buffer_start_samples_12k`, C
+`MfskModeInfo::tx_buffer_start_samples_12k`, Swift `txBufferStartSamples12k`, Kotlin the same):
+where WSJT-X's own transmitter starts it, `Modulator::start`'s `delay_ms` (`Modulator.cpp:163-168`;
+`FrameLayout::TX_DELAY_MS`). For every mode but FT4 that is `TX_START_OFFSET_S` less the lead, so the
+frame lands at DT = 0 (FT8 6000, the 1 s modes 12 000). FT4 is 3600 (`delay_ms = 300`, since 0.16.1,
+#749; 5424 in 0.16.0): its tones leave at 0.348 s and, over a chain with no latency, decode at
+DT -0.152 s (measured on this crate's decoder; a WSJT-X receiver should agree, `ft4_decode.f90:477`
+using the same 0.5 s reference, but `jt9` has not been run on it). For a frame at DT = 0 (a simulator, `ft4sim.f90:91`; FT4 5424)
+use `engine::tx::dt0_buffer_start::<P>(rate)`. Up to 0.15 FT4 audio was the
+103-symbol, `nsps / 8`-ramp form `gen_ft8wave` has, -45 dB from `gen_ft4wave`;
+`tests/gen_wave_vs_wsjtx.rs` now holds FT8, FT4 and FST4 to WSJT-X v3.3.0-beta6's own
+generators (-88 to -95 dB). FST4 (`Waveform::Fst4`) does not extend its first and last
+symbol and ramps half a symbol, as `gen_fst4wave.f90` does; all three keep phase and
+carrier in an integer accumulator (no `f64` per sample).
 
 ### Monomorphisation is why this is free
 
@@ -2675,8 +2728,8 @@ FST4-60A landed without touching shared code.
 |---|---|
 | `resample` | linear resampler to 12 kHz |
 | `downsample` | FFT-based complex decimation (`DownsampleCfg`) |
-| `gfsk` | GFSK tone-to-PCM synthesiser (`GfskCfg`, `GfskStream`). The 3-symbol Gaussian pulse is **1-based** since #482, as `gen_ft8wave.f90` / `gen_ft4wave` / `gen_fst4wave` build it (`tt=(i-1.5*nsps)/nsps`, `i=1..3*nsps`); it had run from `i=0`, one sample early, so every FT8 / FT4 / FST4 waveform was shifted (phase error up to 2π·Δf/fs, 0.023 rad on FT8). Worst normalised sample error against `ft8sim` (v3.2.0-rc1, SNR 99): 1.3e-2 → 1.2e-4 (`tests/gfsk_vs_wsjtx.rs`) |
-| `cpfsk` | plain continuous-phase FSK synthesiser — WSJT-X's positive-`toneSpacing` transmit loop, WSPR / JT9 / JT65 / Q65 (`synth_f32`, `synth_f32_into`); one copy, where four `tx.rs` files had each carried one |
+| `gfsk` | GFSK tone-to-PCM synthesiser (`GfskCfg`, `GfskStream`). The 3-symbol Gaussian pulse is **1-based** since #482, as `gen_ft8wave.f90` / `gen_ft4wave` / `gen_fst4wave` build it (`tt=(i-1.5*nsps)/nsps`, `i=1..3*nsps`); it had run from `i=0`, one sample early, so every FT8 / FT4 / FST4 waveform was shifted (phase error up to 2π·Δf/fs, 0.023 rad on FT8). Worst normalised sample error against `ft8sim` (v3.2.0-rc1, SNR 99): 1.3e-2 → 1.2e-4 (`tests/gfsk_vs_wsjtx.rs`). Since 0.16 each mode has its own framing (`gen_ft4wave`'s ramp symbols, `gen_fst4wave`'s half-symbol ramp), the pulse is beta6's polynomial and the phase a `u64` accumulator: FT8 / FT4 / FST4-15 at -95 / -95 / -88 dB against beta6's generators (`tests/gen_wave_vs_wsjtx.rs`) |
+| `cpfsk` | plain continuous-phase FSK synthesiser — WSJT-X's positive-`toneSpacing` transmit loop, WSPR / JT9 / JT65 / Q65 (`synth_f32`, `synth_f32_into`); one copy, where four `tx.rs` files had each carried one. Since 0.16 it is `Modulator::modulate`'s loop (`sin` of a phase advanced first, in a `u64` accumulator) |
 | `envelope` | the raised-cosine ramp WSJT-X's modulator puts on those four modes' transmissions (`ramp_samples`, `apply_ramp`; #259) |
 | `symbol_fft` | `SymbolFft`: one `nsps`-point FFT reused across a frame's symbols, planned through `engine::fft` — JT9, JT65, Q65 demodulators (#390) |
 | `blanker` | `blanker(audio, nz, ndropmax, npct)`: `blanker.f90`'s impulse-noise blanker, behind FST4's `.noise_blanker()` |
@@ -2899,11 +2952,15 @@ exposes: modulation (`ntones`, `bits_per_symbol`, `nsps`, `symbol_dt`,
 `n_symbols`, `t_slot_s`) and codec (`fec_k`, `fec_n`, `payload_bits`).
 Beyond that geometry it publishes what a host cannot otherwise ask for:
 
-* `tx_start_offset_s` — seconds from the start of the slot buffer to the
-  first symbol, the `dt = 0` reference: 0.5 for FT8, FT4, FST4-15 and Q65
-  15 / 30 s, 1.0 for the other FST4 sub-modes and Q65 from 60 s up (Q65
-  followed `nsps` as `q65.f90:130-131` does; every sub-mode had published
-  1.0 until #399).
+* `tx_start_offset_s` — seconds from the start of the slot to the first tone
+  of a frame at DT = 0, the reference `dt_sec` is measured from: 0.5 for FT8, FT4,
+  FST4-15 and Q65 15 / 30 s, 1.0 for the other FST4 sub-modes, Q65 from 60 s up,
+  WSPR, JT9 and JT65 (Q65 follows `nsps` as `q65.f90:130-131` does; every
+  sub-mode had published 1.0 until #399; JT9 and JT65 were 0.0 until #726).
+* `tx_buffer_start_samples_12k` — where a synthesised buffer goes, in samples
+  from the start of the slot, where WSJT-X's transmitter starts it (`delay_ms`):
+  FT4 3600, FT8 6000, the 1 s modes 12 000. Place a transmission by this, not by
+  `tx_start_offset_s`. For every mode but FT4 the frame then lands at DT = 0.
 * `slot_samples_12k` — the slot in samples (FT4 90 000, FT8 180 000,
   FST4-300 3 600 000), and `decode_fft1_size` — the forward FFT the
   decoder takes over the whole slot (`Protocol::DECODE_FFT1_SIZE`; FT4

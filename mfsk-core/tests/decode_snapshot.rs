@@ -59,6 +59,39 @@
 //! of them. One row changes `freq_hz` / `dt_sec` (14 fixtures): `K1BZM DK8NE -10` is decoded from
 //! another candidate, 245.375 Hz / DT 0.500 -> 244.250 Hz / 0.505, 22 -> 18 hard errors (`jt9`: 18).
 //!
+//! A fifth (#734, 2026-11-14): FT4's subtraction reference is `gen_ft4wave`'s frame (a ramp symbol each
+//! side, whole-symbol ramps; `subtractft4.f90`) instead of `gen_ft8wave`'s form. The residual of a clean
+//! transmitted signal goes from -20.9 dB to nothing through the constant-amplitude LS subtraction, and from
+//! about -20 dB to -29 dB through the LPF subtraction the decoder uses (`lpf_half` 700; measured in review).
+//! Only the six `ft4_*` and the two `iq_*_ft4` fixtures move; no FT8, FST4, JT65, JT9, Q65 or WSPR one.
+//! Messages: none appears; in `ft4_eq_local` three go (`AC6BW KR9A R 559 WI` -15 dB, `CQ RU W0FRC DM79`
+//! -15 dB, `W7BOB KJ7G RR73`: all three in `jt9`'s list for this recording, all marginal under `Local`
+//! (found only in SIC round 1, 17-18 hard errors), and decoded by `ft4_default`, `ft4_ap_hint`,
+//! `ft4_codec_filter` and `ft4_sic_rounds_2/3`; `ft4_single_pass` and `ft4_sic_rounds_1` never held `AC6BW` or
+//! `W0FRC`). The review found no defect in the reference behind it: the new one subtracts every strong signal
+//! better, and the lost three are marginal decodes. A row that stays moves in its numbers (`AC6BW KR9A R
+//! 559 WI` 2299.71 -> 2299.19 Hz, -14.13 -> -15.02 dB, `jt9` -15; its cause is not measured, so it is not
+//! evidence of improvement). `ft4_wsjtx_sample_eq_local_recall_floor` now guards the configuration.
+//!
+//! A sixth (#726, 2026-11-14): JT9's and JT65's `TX_START_OFFSET_S` is WSJT-X's 1.0 s (`Modulator.cpp:163`), not
+//! 0.0, so `Decoder` reports DT on `jt9`'s scale. Only the three `jt9_*` fixtures move (they go through
+//! `Decoder`; the JT65 ones use `DecodeRequest`, whose nominal is the caller's): every `dt_sec` is 1.0 s lower
+//! (`jt9`: 0.0/0.1/-0.2/1.2), and `JA1KAU PD0JAC -23`, the latest frame, is found from another lag inside the
+//! re-centred window (DT 2.196 -> 1.124, `jt9` 1.2; 1504.7 -> 1504.4 Hz; -4.17 -> -3.96 dB). No message appears or goes.
+//!
+//! A seventh (#726, 2026-11-14): JT9's scan is `jt9`'s (`jt9::sync9`: `symspec`'s `ss`, `sync9`, and
+//! `jt9_decode.f90`'s upward bin loop with its `ccflim`/`red2lim` gates), replacing this crate's coarse scan in
+//! score order, and the crate's own `peakdt9` score gate (1.5) is gone. Only the three `jt9_*` fixtures move. Each
+//! now holds what `jt9 -d 1/2/3` prints without an Rx frequency (local build, same file): `fast`/`normal` lose
+//! `CQ GM7GAX IO75` and `K1JT N5KDV EM41`, `deep` loses `CQ GM7GAX IO75` (`jt9` decodes it only with an Rx
+//! window there, `-f 1119`; `jt9_wsjtx_samples.rs` checks that), and the rows that stay come from `jt9`'s bins:
+//! DT within `jt9`'s 0.1 s print (`G7CNF N4HFA EL89` -0.21 in `deep`, `jt9` -0.2), SNR within 0.5 dB.
+//!
+//! An eighth (#747, 2026-11-14): FT8's spectrum baseline is fitted over the decode band, as `get_spectrum_baseline.f90`
+//! passes `nfa`/`nfb` to `baseline.f90`, not over 0-6000 Hz. The 21 FT8 and the two `iq_*_ft8` fixtures move in `snr`
+//! (up to 7.7 dB; on `qso3_busy.wav` every row is now within 0.4 dB of beta6's `jt9 -8 -d 3`, was up to 7.3) and in the
+//! last bits of `sync_score`; no message appears or goes, and `freq_hz`, `dt_sec`, `hard_errors` and `pass` are unchanged.
+//!
 //! Row format, one per line, sorted. Frame family (FT8/FT4/FST4): text,
 //! then `freq_hz`, `dt_sec`, `snr_db`, `sync_score` as f32 bit patterns in
 //! hex, then `hard_errors` and `pass`. Other families and the IQ path: the
@@ -440,7 +473,10 @@ fn jt9_request_shapes() {
         (Jt9Depth::Normal, "normal"),
         (Jt9Depth::Deep, "deep"),
     ] {
+        // `via_decoder::jt9` checks the same fixtures: `Decoder` places the nominal at the mode's
+        // `TX_START_OFFSET_S` (1.0 s since #726), so the request asks for it too.
         let r = DecodeRequest::new(&a, 12_000)
+            .nominal_start(12_000)
             .params(params)
             .depth(depth)
             .decode();

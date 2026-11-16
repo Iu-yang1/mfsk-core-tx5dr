@@ -486,7 +486,9 @@ pub unsafe extern "C" fn mfsk_encode_ft8(
     unsafe { emit_pcm(&pcm, out, cap, out_len, "encode") }
 }
 
-/// Synthesise a standard FT4 message at `freq_hz`. 12 kHz f32 PCM.
+/// Synthesise a standard FT4 message at `freq_hz`. 12 kHz f32 PCM, 60 480 samples: the 103 tone
+/// symbols between a ramp symbol each side, as `gen_ft4wave` frames them, so the tones start 576
+/// samples in. Place the buffer at [`MfskModeInfo::tx_buffer_start_samples_12k`] (3600, WSJT-X's FT4 start).
 ///
 /// # Safety
 ///
@@ -1100,6 +1102,7 @@ pub unsafe extern "C" fn mfsk_mode_info(mode: u32, out: *mut MfskModeInfo) -> Mf
         payload_bits: 0,
         decode_fft1_size: 0,
         caps: 0,
+        tx_buffer_start_samples_12k: 0,
     };
     copy_name(&mut info.name, mode_name_str(i));
 
@@ -1123,6 +1126,7 @@ pub unsafe extern "C" fn mfsk_mode_info(mode: u32, out: *mut MfskModeInfo) -> Mf
             info.payload_bits = m.payload_bits;
             info.decode_fft1_size = m.decode_fft1_size;
             info.caps = u64::from(m.profile.caps);
+            info.tx_buffer_start_samples_12k = m.tx_buffer_start_samples_12k;
         }
         None if mode == MfskMode::Jtty => {
             // JTTY: no registry entry, no slot; one frame is described.
